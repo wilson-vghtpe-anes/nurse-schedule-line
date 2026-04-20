@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>護理排班 - 護理師</title>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, sans-serif; background: #f5f5f5; }
+.tabs { display: flex; background: #fff; border-bottom: 1px solid #e5e5e5; position: sticky; top: 0; z-index: 10; }
+.tab-btn { flex: 1; padding: 14px 4px; font-size: .8rem; color: #888; border: none; background: none; cursor: pointer; border-bottom: 3px solid transparent; }
+.tab-btn.active { color: #06c755; border-bottom-color: #06c755; font-weight: 600; }
+.tab-content { display: none; padding: 16px; }
+.tab-content.active { display: block; }
+.section-title { font-size: .85rem; font-weight: 600; color: #333; margin-bottom: 10px; }
+.date-row { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+.date-row label { font-size: .8rem; color: #666; }
+input[type=date], select { border: 1px solid #ddd; border-radius: 8px; padding: 7px 10px; font-size: .85rem; }
+.btn { display: inline-block; padding: 9px 18px; border-radius: 8px; border: none; font-size: .85rem; cursor: pointer; font-weight: 600; }
+.btn-primary { background: #06c755; color: #fff; }
+.btn-gray { background: #eee; color: #444; }
+.btn-sm { padding: 5px 12px; font-size: .8rem; }
+.btn-outline { background: #fff; border: 1px solid #06c755; color: #06c755; }
+.card { background: #fff; border-radius: 10px; padding: 14px; margin-bottom: 10px; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+.shift-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f0f0f0; font-size: .88rem; }
+.shift-row:last-child { border-bottom: none; }
+.shift-tag { display: inline-block; padding: 3px 9px; border-radius: 12px; background: #e8f5e9; color: #2e7d32; font-size: .78rem; font-weight: 600; }
+.ot-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f0f0f0; font-size: .88rem; }
+.ot-row:last-child { border-bottom: none; }
+.ot-rank { font-weight: 700; color: #1565c0; width: 28px; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: .75rem; }
+.badge-green { background: #e8f5e9; color: #2e7d32; }
+.badge-blue { background: #e3f2fd; color: #1565c0; }
+.badge-orange { background: #fff3e0; color: #e65100; }
+.badge-red { background: #fce4ec; color: #c62828; }
+.badge-gray { background: #f5f5f5; color: #666; }
+.req-card { background: #fff; border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.06); font-size: .85rem; }
+.req-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.req-meta { color: #888; font-size: .78rem; margin-top: 4px; }
+.empty { text-align: center; color: #aaa; padding: 32px 0; font-size: .9rem; }
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 100; justify-content: center; align-items: flex-end; }
+.modal-overlay.open { display: flex; }
+.modal { background: #fff; border-radius: 16px 16px 0 0; padding: 24px 20px 32px; width: 100%; max-width: 480px; }
+.modal h3 { margin-bottom: 16px; font-size: 1rem; }
+.form-group { margin-bottom: 14px; }
+.form-group label { display: block; font-size: .82rem; color: #555; margin-bottom: 5px; }
+.form-group input, .form-group select, .form-group textarea { width: 100%; border: 1px solid #ddd; border-radius: 8px; padding: 9px 12px; font-size: .88rem; }
+textarea { resize: vertical; min-height: 60px; }
+.modal-btns { display: flex; gap: 10px; margin-top: 4px; }
+.toast { display: none; position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); padding: 10px 20px; border-radius: 20px; font-size: .85rem; color: #fff; z-index: 200; }
+.toast-ok { background: #2e7d32; }
+.toast-err { background: #c62828; }
+#loading { display: none; position: fixed; inset: 0; background: rgba(255,255,255,.7); z-index: 300; justify-content: center; align-items: center; }
+.spinner { width: 36px; height: 36px; border: 4px solid #ddd; border-top-color: #06c755; border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.confirm-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 400; display: flex; align-items: center; justify-content: center; }
+.confirm-box { background: #fff; border-radius: 12px; padding: 24px 20px; max-width: 300px; width: 90%; text-align: center; }
+.confirm-box p { margin-bottom: 20px; font-size: .9rem; }
+.confirm-btns { display: flex; gap: 10px; justify-content: center; }
+.mode-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.mode-btn { padding: 6px 14px; border-radius: 16px; border: 1px solid #ddd; background: #fff; font-size: .8rem; cursor: pointer; }
+.mode-btn.active { background: #06c755; color: #fff; border-color: #06c755; }
+</style>
+</head>
+<body>
+<div id="loading"><div class="spinner"></div></div>
+<div id="toast" class="toast"></div>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab('my-schedule')">我的班表</button>
+  <button class="tab-btn" onclick="switchTab('all-schedule')">全員班表</button>
+  <button class="tab-btn" onclick="switchTab('ot-priority')">加班順位</button>
+  <button class="tab-btn" onclick="switchTab('my-requests')">我的申請</button>
+</div>
+
+<!-- Tab: 我的班表 -->
+<div id="tab-my-schedule" class="tab-content active">
+  <div class="date-row">
+    <div class="mode-btns">
+      <button class="mode-btn active" onclick="setMyMode('today')">今天</button>
+      <button class="mode-btn" onclick="setMyMode('tomorrow')">明天</button>
+      <button class="mode-btn" onclick="setMyMode('week')">本週</button>
+      <button class="mode-btn" onclick="setMyMode('month')">本月</button>
+      <button class="mode-btn" onclick="setMyMode('range')">區間</button>
+    </div>
+  </div>
+  <div id="my-range-row" style="display:none;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+    <input type="date" id="my-start">
+    <span style="font-size:.8rem;color:#888">至</span>
+    <input type="date" id="my-end">
+    <button class="btn btn-primary btn-sm" onclick="loadMySchedule()">查詢</button>
+  </div>
+  <div id="my-schedule-list"></div>
+</div>
+
+<!-- Tab: 全員班表 -->
+<div id="tab-all-schedule" class="tab-content">
+  <div class="date-row">
+    <label>日期</label>
+    <input type="date" id="all-date">
+    <button class="btn btn-primary btn-sm" onclick="loadAllSchedule()">查詢</button>
+  </div>
+  <div id="all-schedule-list"></div>
+</div>
+
+<!-- Tab: 加班順位 -->
+<div id="tab-ot-priority" class="tab-content">
+  <div class="date-row">
+    <label>日期</label>
+    <input type="date" id="ot-date">
+    <button class="btn btn-primary btn-sm" onclick="loadOtPriority()">查詢</button>
+  </div>
+  <div id="ot-priority-list"></div>
+</div>
+
+<!-- Tab: 我的申請 -->
+<div id="tab-my-requests" class="tab-content">
+  <div id="my-requests-list"></div>
+</div>
+
+<!-- Modal: 換班申請 -->
+<div class="modal-overlay" id="swap-modal">
+  <div class="modal">
+    <h3 id="swap-modal-title">發換班請求</h3>
+    <input type="hidden" id="swap-type">
+    <input type="hidden" id="swap-my-slot-id">
+    <input type="hidden" id="swap-their-slot-id">
+    <input type="hidden" id="swap-target-user-id">
+    <div class="form-group">
+      <label>您的班次</label>
+      <div id="swap-my-slot-label" style="padding:8px;background:#f5f5f5;border-radius:8px;font-size:.88rem;"></div>
+    </div>
+    <div class="form-group">
+      <label>對方的班次</label>
+      <div id="swap-their-slot-label" style="padding:8px;background:#f5f5f5;border-radius:8px;font-size:.88rem;"></div>
+    </div>
+    <div class="form-group">
+      <label>備註原因（選填）</label>
+      <textarea id="swap-reason" placeholder="說明換班原因…"></textarea>
+    </div>
+    <div class="modal-btns">
+      <button class="btn btn-gray" style="flex:1" onclick="closeSwapModal()">取消</button>
+      <button class="btn btn-primary" style="flex:1" onclick="submitSwapRequest()">送出申請</button>
+    </div>
+  </div>
+</div>
+
+<script>
+window.__LIFF_ID__ = "{{LIFF_ID}}";
+window.__API_BASE__ = "{{API_BASE}}";
+</script>
+<script src="/share.js"></script>
+<script>
+let me = null;
+let usersMap = {};
+let allScheduleData = [];
+let otPriorityData = [];
+let myMode = "week";
+let swapCallback = null;
+
+(async () => {
+  loading(true);
+  await liff.init({ liffId: window.__LIFF_ID__ });
+  if (!liff.isLoggedIn()) { liff.login(); return; }
+  const profile = await liff.getProfile();
+  window._lineUserId = profile.userId;
+
+  try {
+    me = await apiFetch("/api/me");
+  } catch {
+    document.body.innerHTML = '<p style="padding:24px;color:#c00">帳號未綁定或待審核。</p>';
+    return;
+  }
+
+  document.getElementById("all-date").value = today();
+  document.getElementById("ot-date").value = today();
+  await Promise.all([loadMySchedule(), loadAllSchedule(), loadOtPriority(), loadMyRequests()]);
+  loading(false);
+})();
+
+function switchTab(name) {
+  document.querySelectorAll(".tab-btn").forEach((b, i) => {
+    const names = ["my-schedule", "all-schedule", "ot-priority", "my-requests"];
+    b.classList.toggle("active", names[i] === name);
+  });
+  document.querySelectorAll(".tab-content").forEach(c => c.classList.remove("active"));
+  document.getElementById("tab-" + name).classList.add("active");
+}
+
+function setMyMode(mode) {
+  myMode = mode;
+  document.querySelectorAll(".mode-btn").forEach((b, i) => {
+    const modes = ["today", "tomorrow", "week", "month", "range"];
+    b.classList.toggle("active", modes[i] === mode);
+  });
+  document.getElementById("my-range-row").style.display = mode === "range" ? "flex" : "none";
+  if (mode !== "range") loadMySchedule();
+}
+
+async function loadMySchedule() {
+  const el = document.getElementById("my-schedule-list");
+  loading(true);
+  try {
+    let url = `/api/schedules/me?mode=${myMode}`;
+    if (myMode === "range") {
+      const s = document.getElementById("my-start").value;
+      const e = document.getElementById("my-end").value;
+      if (!s || !e) { loading(false); return; }
+      url += `&start=${s}&end=${e}`;
+    }
+    const data = await apiFetch(url);
+    usersMap = data.users || {};
+    renderMySchedule(data.schedules, el);
+  } catch { el.innerHTML = '<p class="empty">載入失敗</p>'; }
+  loading(false);
+}
+
+function renderMySchedule(rows, el) {
+  if (!rows.length) { el.innerHTML = '<p class="empty">此期間無班表資料</p>'; return; }
+  const byDate = {};
+  rows.forEach(r => {
+    if (!byDate[r.schedule_date]) byDate[r.schedule_date] = [];
+    byDate[r.schedule_date].push(r);
+  });
+  el.innerHTML = Object.keys(byDate).sort().map(d => `
+    <div class="card">
+      <div style="font-size:.82rem;color:#888;margin-bottom:6px;">${formatDate(d)}</div>
+      ${byDate[d].map(r => `
+        <div class="shift-row">
+          <span class="shift-tag">${r.shift_type}</span>
+          <span style="color:#555">${r.area || ""}</span>
+        </div>`).join("")}
+    </div>`).join("");
+}
+
+async function loadAllSchedule() {
+  const el = document.getElementById("all-schedule-list");
+  const dateVal = document.getElementById("all-date").value || today();
+  loading(true);
+  try {
+    const data = await apiFetch(`/api/schedules?date=${dateVal}`);
+    usersMap = { ...usersMap, ...data.users };
+    allScheduleData = data.schedules;
+    renderAllSchedule(data.schedules, el, dateVal);
+  } catch { el.innerHTML = '<p class="empty">載入失敗</p>'; }
+  loading(false);
+}
+
+function renderAllSchedule(rows, el, dateVal) {
+  if (!rows.length) { el.innerHTML = '<p class="empty">此日無班表資料</p>'; return; }
+  el.innerHTML = rows.map(r => {
+    const name = usersMap[r.user_id] || "?";
+    return `<div class="card shift-row">
+      <div>
+        <span style="font-weight:600">${name}</span>
+        <span style="margin-left:10px" class="shift-tag">${r.shift_type}</span>
+        ${r.area ? `<span style="color:#888;font-size:.8rem;margin-left:6px">${r.area}</span>` : ""}
+      </div>
+      ${r.user_id !== me.id ? `<button class="btn btn-sm btn-outline" onclick="openShiftSwap('${r.id}','${r.user_id}','${name}','${r.shift_type}','${dateVal}')">換班</button>` : ""}
+    </div>`;
+  }).join("");
+}
+
+async function loadOtPriority() {
+  const el = document.getElementById("ot-priority-list");
+  const dateVal = document.getElementById("ot-date").value || today();
+  loading(true);
+  try {
+    const data = await apiFetch(`/api/ot-priority?date=${dateVal}`);
+    usersMap = { ...usersMap, ...data.users };
+    otPriorityData = data.ot_priority;
+    renderOtPriority(data.ot_priority, el);
+  } catch { el.innerHTML = '<p class="empty">載入失敗</p>'; }
+  loading(false);
+}
+
+function renderOtPriority(rows, el) {
+  if (!rows.length) { el.innerHTML = '<p class="empty">此日無加班順位資料</p>'; return; }
+  el.innerHTML = '<div class="card">' + rows.map(r => {
+    const name = usersMap[r.user_id] || "?";
+    return `<div class="ot-row">
+      <div style="display:flex;align-items:center;gap:12px">
+        <span class="ot-rank">${r.priority_order}</span>
+        <span>${name}</span>
+      </div>
+      ${r.user_id !== me.id ? `<button class="btn btn-sm btn-outline" onclick="openOtSwap('${r.id}','${r.user_id}','${name}',${r.priority_order})">換順位</button>` : ""}
+    </div>`;
+  }).join("") + "</div>";
+}
+
+async function loadMyRequests() {
+  const el = document.getElementById("my-requests-list");
+  try {
+    const data = await apiFetch("/api/swap-requests/me");
+    usersMap = { ...usersMap, ...(data.users || {}) };
+    renderMyRequests(data.swap_requests, el);
+  } catch { el.innerHTML = '<p class="empty">載入失敗</p>'; }
+}
+
+function renderMyRequests(reqs, el) {
+  if (!reqs.length) { el.innerHTML = '<p class="empty">目前無換班申請記錄</p>'; return; }
+  el.innerHTML = reqs.map(r => {
+    const isRequester = r.requester_id === me.id;
+    const isTarget = r.target_user_id === me.id;
+    const rname = r.requester_id ? (usersMap[r.requester_id] || "?") : "系統";
+    const tname = r.target_user_id ? (usersMap[r.target_user_id] || "?") : "—";
+    const rtype = r.request_type === "shift" ? "換班" : r.request_type === "ot_priority" ? "換加班順位" : "主管直接調班";
+    const shortId = r.id.slice(0, 8);
+    const canCancel = isRequester && ["submitted", "pending_peer"].includes(r.status);
+    const canRespond = isTarget && r.status === "pending_peer";
+    return `<div class="req-card">
+      <div class="req-header">
+        <span style="font-weight:600">${rtype}</span>
+        ${statusBadge(r.status)}
+      </div>
+      <div class="req-meta">申請人：${rname} → 對象：${tname}</div>
+      ${r.reason ? `<div class="req-meta">備註：${r.reason}</div>` : ""}
+      <div class="req-meta" style="color:#bbb">${r.created_at ? r.created_at.slice(0,10) : ""} #${shortId}</div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+        ${canCancel ? `<button class="btn btn-gray btn-sm" onclick="cancelRequest('${r.id}')">取消申請</button>` : ""}
+        ${canRespond ? `<button class="btn btn-primary btn-sm" onclick="respondRequest('${r.id}','accepted')">接受</button><button class="btn btn-gray btn-sm" onclick="respondRequest('${r.id}','rejected')">拒絕</button>` : ""}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+// ── Swap modal helpers ─────────────────────────────────────────────────────────
+
+function openShiftSwap(theirScheduleId, theirUserId, theirName, theirShift, dateVal) {
+  // Find my own shift on the same date to offer as swap
+  const myShifts = allScheduleData.filter(r => r.user_id === me.id);
+  if (!myShifts.length) {
+    showToast("您在此日無班表可交換", false);
+    return;
+  }
+  // Use first match; user can see their own shift from my-schedule tab
+  const myShift = myShifts[0];
+  document.getElementById("swap-type").value = "shift";
+  document.getElementById("swap-my-slot-id").value = myShift.id;
+  document.getElementById("swap-their-slot-id").value = theirScheduleId;
+  document.getElementById("swap-target-user-id").value = theirUserId;
+  document.getElementById("swap-modal-title").textContent = "發換班請求";
+  document.getElementById("swap-my-slot-label").textContent = `${dateVal} ${myShift.shift_type}${myShift.area ? " " + myShift.area : ""}`;
+  document.getElementById("swap-their-slot-label").textContent = `${theirName}：${dateVal} ${theirShift}`;
+  document.getElementById("swap-reason").value = "";
+  document.getElementById("swap-modal").classList.add("open");
+}
+
+function openOtSwap(theirOtId, theirUserId, theirName, theirOrder) {
+  const dateVal = document.getElementById("ot-date").value || today();
+  const myOt = otPriorityData.find(r => r.user_id === me.id);
+  if (!myOt) {
+    showToast("您在此日無加班順位可交換", false);
+    return;
+  }
+  document.getElementById("swap-type").value = "ot_priority";
+  document.getElementById("swap-my-slot-id").value = myOt.id;
+  document.getElementById("swap-their-slot-id").value = theirOtId;
+  document.getElementById("swap-target-user-id").value = theirUserId;
+  document.getElementById("swap-modal-title").textContent = "發換加班順位請求";
+  document.getElementById("swap-my-slot-label").textContent = `${dateVal} 第 ${myOt.priority_order} 順位`;
+  document.getElementById("swap-their-slot-label").textContent = `${theirName}：${dateVal} 第 ${theirOrder} 順位`;
+  document.getElementById("swap-reason").value = "";
+  document.getElementById("swap-modal").classList.add("open");
+}
+
+function closeSwapModal() {
+  document.getElementById("swap-modal").classList.remove("open");
+}
+
+async function submitSwapRequest() {
+  const stype = document.getElementById("swap-type").value;
+  const mySlotId = document.getElementById("swap-my-slot-id").value;
+  const theirSlotId = document.getElementById("swap-their-slot-id").value;
+  const targetUserId = document.getElementById("swap-target-user-id").value;
+  const reason = document.getElementById("swap-reason").value;
+
+  const body = {
+    request_type: stype,
+    target_user_id: targetUserId,
+    reason: reason || null,
+  };
+  if (stype === "shift") {
+    body.schedule_id = mySlotId;
+    body.target_schedule_id = theirSlotId;
+  } else {
+    body.ot_priority_id = mySlotId;
+    body.target_ot_priority_id = theirSlotId;
+  }
+
+  loading(true);
+  try {
+    await apiFetch("/api/swap-requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    closeSwapModal();
+    showToast("申請已送出，等待對方確認");
+    await loadMyRequests();
+    switchTab("my-requests");
+  } catch (e) {
+    showToast("送出失敗：" + e.message, false);
+  }
+  loading(false);
+}
+
+async function cancelRequest(requestId) {
+  const ok = await showConfirm("確定要取消此申請？");
+  if (!ok) return;
+  loading(true);
+  try {
+    await apiFetch(`/api/swap-requests/${requestId}/cancel`, { method: "POST" });
+    showToast("申請已取消");
+    await loadMyRequests();
+  } catch (e) {
+    showToast("取消失敗：" + e.message, false);
+  }
+  loading(false);
+}
+
+async function respondRequest(requestId, response) {
+  const label = response === "accepted" ? "接受" : "拒絕";
+  const ok = await showConfirm(`確定要${label}此換班申請？`);
+  if (!ok) return;
+  loading(true);
+  try {
+    await apiFetch(`/api/swap-requests/${requestId}/respond`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ response }),
+    });
+    showToast(response === "accepted" ? "已接受，等待主管審核" : "已拒絕");
+    await loadMyRequests();
+  } catch (e) {
+    showToast("操作失敗：" + e.message, false);
+  }
+  loading(false);
+}
+</script>
+</body>
+</html>
