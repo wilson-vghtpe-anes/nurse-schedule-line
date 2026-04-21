@@ -316,7 +316,8 @@ def parse_date_header(raw: str, year: int, month: int) -> str | None:
 
 
 def detect_excel_format(wb, year: int, month: int) -> dict | None:
-    """用 GPT 判讀 Excel 結構，失敗回傳 None。"""
+    """用 Claude 判讀 Excel 結構，失敗回傳 None。"""
+    print(f"[detect_excel_format] client={'ok' if _anthropic_client else 'None'}, key_set={bool(ANTHROPIC_API_KEY)}")
     if not _anthropic_client:
         return None
 
@@ -363,15 +364,18 @@ def detect_excel_format(wb, year: int, month: int) -> dict | None:
 }}"""
 
     try:
+        print("[detect_excel_format] calling Claude API...")
         resp = _anthropic_client.messages.create(
             model="claude-haiku-4-5",
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = resp.content[0].text.strip()
+        print(f"[detect_excel_format] response: {raw[:200]}")
         raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
         return json.loads(raw)
-    except Exception:
+    except Exception as e:
+        print(f"[detect_excel_format] error: {e}")
         return None
 
 
