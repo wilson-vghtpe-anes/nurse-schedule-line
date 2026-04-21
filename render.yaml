@@ -16,3 +16,5 @@ services:
         sync: false
       - key: LIFF_ID
         sync: false
+      - key: API_BASE
+        sync: false

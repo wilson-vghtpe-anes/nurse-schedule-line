@@ -517,9 +517,10 @@ async function uploadFile(file) {
       班表匯入：${data.schedules_imported} 筆，加班順位匯入：${data.ot_priority_imported} 筆
     </div>`;
     if (data.unmatched_names.length) {
-      html += `<div class="import-result import-warn">
-        未比對到的姓名：${data.unmatched_names.join("、")}
-      </div>`;
+      html += `<div class="import-result import-warn">未比對到的姓名：${data.unmatched_names.join("、")}</div>`;
+    }
+    if (data.invalid_shifts && data.invalid_shifts.length) {
+      html += `<div class="import-result import-warn">無效班別（已略過）：${data.invalid_shifts.join("、")}</div>`;
     }
     resultEl.innerHTML = html;
     showToast("匯入完成");

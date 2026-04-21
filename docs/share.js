@@ -35,7 +35,7 @@ async function apiFetch(path, opts = {}) {
   const res = await fetch(API_BASE + path, {
     ...opts,
     headers: {
-      "X-Line-User-Id": _lineUserId,
+      "X-Line-User-Id": window._lineUserId || "",
       ...(opts.headers || {}),
     },
   });

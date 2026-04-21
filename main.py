@@ -10,7 +10,7 @@ from typing import Optional
 import requests
 from fastapi import FastAPI, Request, HTTPException, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import openpyxl
@@ -22,6 +22,7 @@ LINE_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 LIFF_ID = os.getenv("LIFF_ID", "")
+API_BASE = os.getenv("API_BASE", "")
 PORT = int(os.getenv("PORT", "10001"))
 
 SUPABASE_HEADERS = {
@@ -100,26 +101,26 @@ def get_reviewers():
 # ── Supabase: schedule helpers ─────────────────────────────────────────────────
 
 def get_schedules_by_user_date_range(user_id: str, start: str, end: str):
-    return _sb("schedules", params={
-        "user_id": f"eq.{user_id}",
-        "schedule_date": f"gte.{start}",
-        "and": f"(schedule_date.lte.{end})",
-        "status": "eq.active",
-        "order": "schedule_date",
-    }) or []
+    params = [
+        ("user_id", f"eq.{user_id}"),
+        ("schedule_date", f"gte.{start}"),
+        ("schedule_date", f"lte.{end}"),
+        ("status", "eq.active"),
+        ("order", "schedule_date"),
+    ]
+    return _sb("schedules", params=params) or []
 
 
 def _get_schedules_range(start: str, end: str, user_id: str = None):
-    params = {
-        "schedule_date": f"gte.{start}",
-        "status": "eq.active",
-        "order": "schedule_date,user_id",
-        "select": "id,user_id,schedule_date,shift_type,area,notes,source_version",
-    }
-    if end:
-        params["and"] = f"(schedule_date.lte.{end})"
+    params = [
+        ("schedule_date", f"gte.{start}"),
+        ("schedule_date", f"lte.{end}"),
+        ("status", "eq.active"),
+        ("order", "schedule_date,user_id"),
+        ("select", "id,user_id,schedule_date,shift_type,area,notes,source_version"),
+    ]
     if user_id:
-        params["user_id"] = f"eq.{user_id}"
+        params.append(("user_id", f"eq.{user_id}"))
     return _sb("schedules", params=params) or []
 
 
@@ -583,11 +584,15 @@ async def api_import_schedules(
     schedule_records = []
     ot_records = []
     unmatched_names = set()
+    invalid_shifts = set()
 
     for item in parsed["schedules"]:
         uid = users_map.get(item["name"])
         if not uid:
             unmatched_names.add(item["name"])
+            continue
+        if item["shift_type"] not in SHIFT_TYPES:
+            invalid_shifts.add(item["shift_type"])
             continue
         schedule_records.append({
             "user_id": uid,
@@ -618,6 +623,7 @@ async def api_import_schedules(
         "schedules_imported": len(schedule_records),
         "ot_priority_imported": len(ot_records),
         "unmatched_names": list(unmatched_names),
+        "invalid_shifts": list(invalid_shifts),
         "success": sched_ok and ot_ok,
     }
 
@@ -951,9 +957,12 @@ async def api_direct_swap(body: DirectSwapBody, manager=Depends(require_manager)
 @app.get("/{filename}.html")
 async def serve_html(filename: str):
     path = os.path.join(DOCS_DIR, f"{filename}.html")
-    if os.path.exists(path):
-        return FileResponse(path)
-    raise HTTPException(status_code=404)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404)
+    content = open(path, encoding="utf-8").read()
+    content = content.replace("{{LIFF_ID}}", LIFF_ID)
+    content = content.replace("{{API_BASE}}", API_BASE)
+    return Response(content, media_type="text/html")
 
 
 @app.get("/share.js")
