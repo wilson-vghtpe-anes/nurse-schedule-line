@@ -139,7 +139,8 @@ textarea { resize: vertical; min-height: 60px; }
 <!-- Tab: 匯入班表 -->
 <div id="tab-import" class="tab-content">
   <p style="font-size:.85rem;color:#666;margin-bottom:14px;">
-    Excel 格式：工作表「班表」含欄位（日期/姓名/班別/房區），「加班順位」含（日期/順位/姓名）。
+    支援各種 Excel 格式，系統會自動判讀欄位與工作表名稱。<br>
+    班表可為「橫式」（每人一行，日期為欄）或「直式」（每行一筆記錄）；加班順位請含順位、姓名、班別欄位。
   </p>
   <div class="upload-area" id="drop-zone" onclick="document.getElementById('file-input').click()">
     <div style="font-size:2rem;margin-bottom:8px;">📂</div>
