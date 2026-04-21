@@ -466,7 +466,7 @@ def _parse_ot_priority_sheet(ws, version: str) -> list:
         order = row[col.get("順位", 1)]
         name = str(row[col.get("姓名", 2)] or "").strip()
         shift_type = str(row[col.get("班別", 3)] or "").strip() if len(row) > col.get("班別", 3) else ""
-        if not raw_date or order is None or not name:
+        if not raw_date or order is None or not name or isinstance(order, datetime):
             continue
         if isinstance(raw_date, (date, datetime)):
             date_str = raw_date.strftime("%Y-%m-%d") if isinstance(raw_date, datetime) else raw_date.isoformat()
