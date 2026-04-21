@@ -1,4 +1,5 @@
 import os
+import re
 import hashlib
 import hmac
 import base64
@@ -14,6 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import openpyxl
+from openai import OpenAI
 
 load_dotenv()
 
@@ -24,6 +26,9 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 LIFF_ID = os.getenv("LIFF_ID", "")
 API_BASE = os.getenv("API_BASE", "")
 PORT = int(os.getenv("PORT", "10001"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
+_openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 SUPABASE_HEADERS = {
     "apikey": SUPABASE_KEY,
@@ -292,31 +297,116 @@ def auto_reject_conflicts(exclude_request_id: str, schedule_ids: list, ot_priori
 
 # ── Excel parsing ──────────────────────────────────────────────────────────────
 
-def parse_schedule_excel(file_bytes: bytes, version: str = "") -> dict:
-    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+def infer_year_month(version: str):
+    """從檔名版本字串萃取年月，格式如 '20260414'；失敗回傳今天。"""
+    m = re.search(r"(20\d{2})(\d{2})\d{2}", version)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    today = datetime.today()
+    return today.year, today.month
+
+
+def parse_date_header(raw: str, year: int, month: int) -> str | None:
+    """將 '5/1\n五' 解析為 '2026-05-01'。"""
+    part = str(raw).split("\n")[0].strip()
+    m = re.match(r"(\d{1,2})[/\-](\d{1,2})", part)
+    if not m:
+        return None
+    return f"{year}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
+
+
+def detect_excel_format(wb, year: int, month: int) -> dict | None:
+    """用 GPT 判讀 Excel 結構，失敗回傳 None。"""
+    if not _openai_client:
+        return None
+
+    def _rows_preview(ws, n=4):
+        rows = []
+        for i, row in enumerate(ws.iter_rows(min_row=1, max_row=n, values_only=True)):
+            rows.append([str(v) if v is not None else None for v in row])
+        return rows
+
+    per_sheet = {name: _rows_preview(wb[name]) for name in wb.sheetnames}
+    prompt = f"""你是 Excel 班表解析助手。以下是 Excel 工作表資訊，請分析並回傳解析設定（純 JSON，不加 markdown code block）。
+
+工作表列表：{wb.sheetnames}
+
+各工作表前4行（list of rows，每 row 為 list of cell values）：
+{json.dumps(per_sheet, ensure_ascii=False)}
+
+請判斷：
+1. schedule_sheet：哪個 sheet 是班表（護理師每日班別），通常每行一位護理師或一筆記錄
+2. ot_priority_sheet：哪個 sheet 是加班順位（有順位/order 欄）；無則 null
+3. schedule_format："wide"（日期橫向為欄）或 "long"（每行一筆日期+班別）
+4. wide_config（format=wide 時）：
+   - name_col：姓名欄 index（0-based）
+   - area_col：房區/區域欄 index（無則 -1）
+   - date_start_col：第一個日期欄 index
+   - data_start_row：資料起始行 index（跳過表頭和摘要行，0-based）
+   - skip_row_keywords：用來識別非資料行的關鍵字 list（如 ["班人數","合計"]）
+5. long_config（format=long 時）：date_col, name_col, shift_col, area_col, data_start_row（均 0-based）
+6. shift_map：班別值正規化對應（如 {{"OFF":"休","off":"休","休假":"休","None":""}}）
+
+參考年月：{year}-{month:02d}（日期欄標頭如 "5/1" 請以此年份推算完整日期）
+
+回傳 JSON（不加任何說明文字）：
+{{
+  "schedule_sheet": "工作表1",
+  "ot_priority_sheet": null,
+  "schedule_format": "wide",
+  "wide_config": {{
+    "name_col": 0, "area_col": 3, "date_start_col": 8,
+    "data_start_row": 2, "skip_row_keywords": ["班人數"]
+  }},
+  "long_config": null,
+  "shift_map": {{"OFF": "休", "off": "休"}}
+}}"""
+
+    try:
+        resp = _openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=512,
+        )
+        raw = resp.choices[0].message.content.strip()
+        raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def _parse_wide_schedule(ws, cfg: dict, shift_map: dict, version: str, year: int, month: int) -> list:
+    headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+    date_cols = {}
+    for ci in range(cfg["date_start_col"], len(headers)):
+        raw = headers[ci]
+        if not raw:
+            continue
+        ds = parse_date_header(str(raw), year, month)
+        if ds:
+            date_cols[ci] = ds
+
+    skip_kws = cfg.get("skip_row_keywords", [])
+    name_ci = cfg["name_col"]
+    area_ci = cfg.get("area_col", -1)
+    data_row = cfg["data_start_row"] + 1  # convert 0-based to openpyxl 1-based
 
     schedules = []
-    ot_priorities = []
-
-    if "班表" in wb.sheetnames:
-        ws = wb["班表"]
-        headers = [str(c.value).strip() if c.value else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
-        col = {h: i for i, h in enumerate(headers)}
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if not any(row):
+    for row in ws.iter_rows(min_row=data_row, values_only=True):
+        if not any(row):
+            continue
+        name = str(row[name_ci] or "").strip()
+        if not name or any(kw in name for kw in skip_kws):
+            continue
+        area = str(row[area_ci] or "").strip() if area_ci >= 0 and area_ci < len(row) else ""
+        for ci, date_str in date_cols.items():
+            if ci >= len(row):
                 continue
-            raw_date = row[col.get("日期", 0)]
-            name = str(row[col.get("姓名", 1)] or "").strip()
-            shift = str(row[col.get("班別", 2)] or "").strip()
-            area = str(row[col.get("房區", 3)] or "").strip() if "房區" in col else ""
-
-            if not raw_date or not name or not shift:
+            raw_shift = str(row[ci] or "").strip()
+            shift = shift_map.get(raw_shift, raw_shift)
+            if not shift:
                 continue
-            if isinstance(raw_date, (date, datetime)):
-                date_str = raw_date.strftime("%Y-%m-%d") if isinstance(raw_date, datetime) else raw_date.isoformat()
-            else:
-                date_str = str(raw_date).strip()
-
             schedules.append({
                 "date_str": date_str,
                 "name": name,
@@ -324,33 +414,117 @@ def parse_schedule_excel(file_bytes: bytes, version: str = "") -> dict:
                 "area": area,
                 "source_version": version,
             })
+    return schedules
 
-    if "加班順位" in wb.sheetnames:
-        ws = wb["加班順位"]
-        headers = [str(c.value).strip() if c.value else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
-        col = {h: i for i, h in enumerate(headers)}
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if not any(row):
-                continue
-            raw_date = row[col.get("日期", 0)]
-            order = row[col.get("順位", 1)]
-            name = str(row[col.get("姓名", 2)] or "").strip()
-            shift_type = str(row[col.get("班別", 3)] or "").strip() if len(row) > col.get("班別", 3) else ""
 
-            if not raw_date or order is None or not name:
-                continue
-            if isinstance(raw_date, (date, datetime)):
-                date_str = raw_date.strftime("%Y-%m-%d") if isinstance(raw_date, datetime) else raw_date.isoformat()
-            else:
-                date_str = str(raw_date).strip()
+def _parse_long_schedule(ws, cfg: dict, shift_map: dict, version: str) -> list:
+    date_ci = cfg.get("date_col", 0)
+    name_ci = cfg.get("name_col", 1)
+    shift_ci = cfg.get("shift_col", 2)
+    area_ci = cfg.get("area_col", -1)
+    data_row = cfg.get("data_start_row", 1)
 
-            ot_priorities.append({
-                "date_str": date_str,
-                "priority_order": int(order),
-                "name": name,
-                "shift_type": shift_type or None,
-                "source_version": version,
-            })
+    schedules = []
+    for row in ws.iter_rows(min_row=data_row + 1, values_only=True):
+        if not any(row):
+            continue
+        raw_date = row[date_ci] if date_ci < len(row) else None
+        name = str(row[name_ci] or "").strip() if name_ci < len(row) else ""
+        raw_shift = str(row[shift_ci] or "").strip() if shift_ci < len(row) else ""
+        shift = shift_map.get(raw_shift, raw_shift)
+        area = str(row[area_ci] or "").strip() if area_ci >= 0 and area_ci < len(row) else ""
+
+        if not raw_date or not name or not shift:
+            continue
+        if isinstance(raw_date, (date, datetime)):
+            date_str = raw_date.strftime("%Y-%m-%d") if isinstance(raw_date, datetime) else raw_date.isoformat()
+        else:
+            date_str = str(raw_date).strip()
+
+        schedules.append({
+            "date_str": date_str,
+            "name": name,
+            "shift_type": shift,
+            "area": area,
+            "source_version": version,
+        })
+    return schedules
+
+
+def _parse_ot_priority_sheet(ws, version: str) -> list:
+    """加班順位 sheet 解析（long 格式：日期/順位/姓名/班別）。"""
+    headers = [str(c.value).strip() if c.value else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
+    col = {h: i for i, h in enumerate(headers)}
+    ot_priorities = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if not any(row):
+            continue
+        raw_date = row[col.get("日期", 0)]
+        order = row[col.get("順位", 1)]
+        name = str(row[col.get("姓名", 2)] or "").strip()
+        shift_type = str(row[col.get("班別", 3)] or "").strip() if len(row) > col.get("班別", 3) else ""
+        if not raw_date or order is None or not name:
+            continue
+        if isinstance(raw_date, (date, datetime)):
+            date_str = raw_date.strftime("%Y-%m-%d") if isinstance(raw_date, datetime) else raw_date.isoformat()
+        else:
+            date_str = str(raw_date).strip()
+        ot_priorities.append({
+            "date_str": date_str,
+            "priority_order": int(order),
+            "name": name,
+            "shift_type": shift_type or None,
+            "source_version": version,
+        })
+    return ot_priorities
+
+
+def parse_schedule_excel(file_bytes: bytes, version: str = "") -> dict:
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+    year, month = infer_year_month(version)
+
+    fmt = detect_excel_format(wb, year, month)
+
+    schedules = []
+    ot_priorities = []
+
+    if fmt:
+        shift_map = fmt.get("shift_map", {})
+
+        sched_sheet = fmt.get("schedule_sheet")
+        if sched_sheet and sched_sheet in wb.sheetnames:
+            ws = wb[sched_sheet]
+            if fmt.get("schedule_format") == "wide" and fmt.get("wide_config"):
+                schedules = _parse_wide_schedule(ws, fmt["wide_config"], shift_map, version, year, month)
+            elif fmt.get("schedule_format") == "long" and fmt.get("long_config"):
+                schedules = _parse_long_schedule(ws, fmt["long_config"], shift_map, version)
+
+        ot_sheet = fmt.get("ot_priority_sheet")
+        if ot_sheet and ot_sheet in wb.sheetnames:
+            ot_priorities = _parse_ot_priority_sheet(wb[ot_sheet], version)
+    else:
+        # Fallback：舊硬碼邏輯
+        if "班表" in wb.sheetnames:
+            ws = wb["班表"]
+            headers = [str(c.value).strip() if c.value else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
+            col = {h: i for i, h in enumerate(headers)}
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if not any(row):
+                    continue
+                raw_date = row[col.get("日期", 0)]
+                name = str(row[col.get("姓名", 1)] or "").strip()
+                shift = str(row[col.get("班別", 2)] or "").strip()
+                area = str(row[col.get("房區", 3)] or "").strip() if "房區" in col else ""
+                if not raw_date or not name or not shift:
+                    continue
+                if isinstance(raw_date, (date, datetime)):
+                    date_str = raw_date.strftime("%Y-%m-%d") if isinstance(raw_date, datetime) else raw_date.isoformat()
+                else:
+                    date_str = str(raw_date).strip()
+                schedules.append({"date_str": date_str, "name": name, "shift_type": shift, "area": area, "source_version": version})
+
+        if "加班順位" in wb.sheetnames:
+            ot_priorities = _parse_ot_priority_sheet(wb["加班順位"], version)
 
     return {"schedules": schedules, "ot_priority": ot_priorities}
 
