@@ -511,9 +511,7 @@ def parse_schedule_excel(file_bytes: bytes, version: str = "") -> dict:
         elif sched_sheet:
             debug["ai_sheet_error"] = f"偵測到的工作表「{sched_sheet}」不存在於檔案中"
 
-        ot_sheet = fmt.get("ot_priority_sheet")
-        if ot_sheet and ot_sheet in wb.sheetnames:
-            ot_priorities = _parse_ot_priority_sheet(wb[ot_sheet], version)
+        # ot_priority_sheet 暫不解析
     else:
         debug["ai_error"] = "AI 判讀失敗，使用舊版固定格式解析"
         # Fallback：舊硬碼邏輯
