@@ -484,6 +484,13 @@ def parse_schedule_excel(file_bytes: bytes, version: str = "") -> dict:
     year, month = infer_year_month(version)
 
     fmt = detect_excel_format(wb, year, month)
+    debug = {
+        "sheets_found": wb.sheetnames,
+        "ai_detected": fmt is not None,
+        "ai_sheet": fmt.get("schedule_sheet") if fmt else None,
+        "ai_format": fmt.get("schedule_format") if fmt else None,
+        "ai_ot_sheet": fmt.get("ot_priority_sheet") if fmt else None,
+    }
 
     schedules = []
     ot_priorities = []
@@ -498,11 +505,14 @@ def parse_schedule_excel(file_bytes: bytes, version: str = "") -> dict:
                 schedules = _parse_wide_schedule(ws, fmt["wide_config"], shift_map, version, year, month)
             elif fmt.get("schedule_format") == "long" and fmt.get("long_config"):
                 schedules = _parse_long_schedule(ws, fmt["long_config"], shift_map, version)
+        elif sched_sheet:
+            debug["ai_sheet_error"] = f"偵測到的工作表「{sched_sheet}」不存在於檔案中"
 
         ot_sheet = fmt.get("ot_priority_sheet")
         if ot_sheet and ot_sheet in wb.sheetnames:
             ot_priorities = _parse_ot_priority_sheet(wb[ot_sheet], version)
     else:
+        debug["ai_error"] = "AI 判讀失敗，使用舊版固定格式解析"
         # Fallback：舊硬碼邏輯
         if "班表" in wb.sheetnames:
             ws = wb["班表"]
@@ -526,7 +536,9 @@ def parse_schedule_excel(file_bytes: bytes, version: str = "") -> dict:
         if "加班順位" in wb.sheetnames:
             ot_priorities = _parse_ot_priority_sheet(wb["加班順位"], version)
 
-    return {"schedules": schedules, "ot_priority": ot_priorities}
+    debug["parsed_schedule_count"] = len(schedules)
+    debug["parsed_ot_count"] = len(ot_priorities)
+    return {"schedules": schedules, "ot_priority": ot_priorities, "_debug": debug}
 
 
 # ── Date utilities ─────────────────────────────────────────────────────────────
@@ -764,6 +776,7 @@ async def api_import_schedules(
         version = file.filename.replace(".xlsx", "").replace(".xls", "")
 
     parsed = parse_schedule_excel(content, version)
+    debug_info = parsed.get("_debug", {})
     users_map = {u["name"]: u["id"] for u in get_all_users()}
 
     schedule_records = []
@@ -811,6 +824,7 @@ async def api_import_schedules(
         "unmatched_names": list(unmatched_names),
         "invalid_shifts": list(invalid_shifts),
         "success": sched_ok and ot_ok,
+        "debug": debug_info,
     }
 
 

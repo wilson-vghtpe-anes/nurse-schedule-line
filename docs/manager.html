@@ -520,17 +520,34 @@ async function uploadFile(file) {
       body: fd,
     });
     const data = await res.json();
-    let html = `<div class="import-result import-ok">
+    const d = data.debug || {};
+    const okClass = data.schedules_imported > 0 ? "import-ok" : "import-warn";
+    let html = `<div class="import-result ${okClass}">
       班表匯入：${data.schedules_imported} 筆，加班順位匯入：${data.ot_priority_imported} 筆
     </div>`;
-    if (data.unmatched_names.length) {
-      html += `<div class="import-result import-warn">未比對到的姓名：${data.unmatched_names.join("、")}</div>`;
+    if (data.unmatched_names && data.unmatched_names.length) {
+      html += `<div class="import-result import-warn">⚠️ 未比對到的姓名：${data.unmatched_names.join("、")}</div>`;
     }
     if (data.invalid_shifts && data.invalid_shifts.length) {
-      html += `<div class="import-result import-warn">無效班別（已略過）：${data.invalid_shifts.join("、")}</div>`;
+      html += `<div class="import-result import-warn">⚠️ 無效班別（已略過）：${data.invalid_shifts.join("、")}</div>`;
+    }
+    if (data.schedules_imported === 0 || d.ai_error || d.ai_sheet_error) {
+      let dbg = `<div class="import-result" style="background:#f5f5f5;color:#555;font-size:.8rem;margin-top:6px;">
+        <b>診斷資訊</b><br>
+        工作表：${(d.sheets_found||[]).join("、") || "—"}<br>
+        AI 判讀：${d.ai_detected ? "✅ 成功" : "❌ 失敗（使用舊格式解析）"}<br>`;
+      if (d.ai_detected) {
+        dbg += `偵測到的班表工作表：${d.ai_sheet || "—"}（格式：${d.ai_format || "—"}）<br>`;
+        dbg += `偵測到的加班順位工作表：${d.ai_ot_sheet || "無"}<br>`;
+      }
+      dbg += `Excel 解析筆數：班表 ${d.parsed_schedule_count ?? "—"} 筆 / 加班順位 ${d.parsed_ot_count ?? "—"} 筆<br>`;
+      if (d.ai_error) dbg += `<span style="color:#c00">${d.ai_error}</span><br>`;
+      if (d.ai_sheet_error) dbg += `<span style="color:#c00">${d.ai_sheet_error}</span><br>`;
+      dbg += `</div>`;
+      html += dbg;
     }
     resultEl.innerHTML = html;
-    showToast("匯入完成");
+    showToast(data.schedules_imported > 0 ? "匯入完成" : "匯入完成（請確認診斷資訊）");
   } catch (e) {
     resultEl.innerHTML = `<div class="import-result import-warn">匯入失敗：${e.message}</div>`;
     showToast("匯入失敗", false);
