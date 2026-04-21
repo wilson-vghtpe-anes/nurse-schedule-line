@@ -144,17 +144,40 @@ textarea { resize: vertical; min-height: 60px; }
 
 <!-- Tab: 匯入班表 -->
 <div id="tab-import" class="tab-content">
-  <p style="font-size:.85rem;color:#666;margin-bottom:14px;">
-    支援各種 Excel 格式，系統會自動判讀欄位與工作表名稱。<br>
-    班表可為「橫式」（每人一行，日期為欄）或「直式」（每行一筆記錄）；加班順位請含順位、姓名、班別欄位。
-  </p>
-  <div class="upload-area" id="drop-zone" onclick="document.getElementById('file-input').click()">
-    <div style="font-size:2rem;margin-bottom:8px;">📂</div>
-    <div style="font-weight:600;margin-bottom:4px;">點擊或拖曳上傳 Excel</div>
-    <div style="font-size:.8rem;color:#aaa">.xlsx 格式</div>
+
+  <!-- 1. 大班表 -->
+  <div class="card" style="margin-bottom:12px">
+    <div style="font-weight:600;margin-bottom:6px;">上傳大班表</div>
+    <p style="font-size:.82rem;color:#666;margin:0 0 10px">支援橫式（每人一行）或直式格式，系統自動判讀。</p>
+    <div class="upload-area" id="drop-zone" onclick="document.getElementById('file-input').click()">
+      <div style="font-size:1.8rem;margin-bottom:6px;">📂</div>
+      <div style="font-weight:600;margin-bottom:2px;">點擊或拖曳上傳 Excel</div>
+      <div style="font-size:.78rem;color:#aaa">.xlsx 格式</div>
+    </div>
+    <input type="file" id="file-input" accept=".xlsx,.xls" style="display:none" onchange="handleFileSelect(event)">
+    <div id="import-result"></div>
   </div>
-  <input type="file" id="file-input" accept=".xlsx,.xls" style="display:none" onchange="handleFileSelect(event)">
-  <div id="import-result"></div>
+
+  <!-- 2. 加班順序 -->
+  <div class="card" style="margin-bottom:12px;opacity:.55">
+    <div style="font-weight:600;margin-bottom:6px;">上傳加班順序 <span style="font-size:.78rem;color:#aaa;font-weight:400">（待開發）</span></div>
+    <p style="font-size:.82rem;color:#888;margin:0 0 10px">請含順位、姓名、班別欄位。</p>
+    <div class="upload-area" style="pointer-events:none;background:#f8f8f8;border-style:dashed">
+      <div style="font-size:1.8rem;margin-bottom:6px;">📂</div>
+      <div style="font-weight:600;margin-bottom:2px;color:#bbb">功能開發中</div>
+    </div>
+  </div>
+
+  <!-- 3. 白班區域 -->
+  <div class="card" style="opacity:.55">
+    <div style="font-weight:600;margin-bottom:6px;">上傳白班區域 <span style="font-size:.78rem;color:#aaa;font-weight:400">（待開發）</span></div>
+    <p style="font-size:.82rem;color:#888;margin:0 0 10px">將依姓名對應班表，寫入各筆記錄的房區（area）欄位。</p>
+    <div class="upload-area" style="pointer-events:none;background:#f8f8f8;border-style:dashed">
+      <div style="font-size:1.8rem;margin-bottom:6px;">📂</div>
+      <div style="font-weight:600;margin-bottom:2px;color:#bbb">功能開發中</div>
+    </div>
+  </div>
+
 </div>
 
 <!-- Tab: 直接調班 -->
