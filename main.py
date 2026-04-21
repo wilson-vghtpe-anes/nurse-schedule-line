@@ -181,6 +181,19 @@ def get_ot_priority_by_id(ot_priority_id: str):
     return rows[0] if rows else None
 
 
+def get_ot_priority_range(start: str, end: str, user_id: str = None):
+    params = [
+        ("priority_date", f"gte.{start}"),
+        ("priority_date", f"lte.{end}"),
+        ("status", "eq.active"),
+        ("order", "priority_date,shift_type,priority_order"),
+        ("select", "id,priority_date,user_id,shift_type,priority_order,source_version"),
+    ]
+    if user_id:
+        params.append(("user_id", f"eq.{user_id}"))
+    return _sb("ot_priority", params=params) or []
+
+
 def upsert_ot_priority(records: list):
     return requests.post(
         f"{SUPABASE_URL}/rest/v1/ot_priority",
@@ -761,16 +774,39 @@ async def api_schedules(
     return {"schedules": rows, "users": {uid: u["name"] for uid, u in users_map.items()}}
 
 
+@app.get("/api/ot-priority/me")
+async def api_ot_priority_me(
+    month: Optional[str] = None,
+    user=Depends(get_current_user),
+):
+    if month:
+        start, end = month_range(month)
+    else:
+        start, end = month_range(datetime.today().strftime("%Y-%m"))
+    rows = get_ot_priority_range(start, end, user_id=user["id"])
+    return {"ot_priority": rows}
+
+
 @app.get("/api/ot-priority")
 async def api_ot_priority(
     date: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
     shift_type: Optional[str] = None,
+    name: Optional[str] = None,
     user=Depends(get_current_user),
 ):
-    target_date = date or datetime.today().strftime("%Y-%m-%d")
-    rows = get_ot_priority_by_date(target_date, shift_type)
     users_map = _build_users_map()
-    return {"date": target_date, "ot_priority": rows, "users": {uid: u["name"] for uid, u in users_map.items()}}
+    if start and end:
+        rows = get_ot_priority_range(start, end)
+    else:
+        target_date = date or datetime.today().strftime("%Y-%m-%d")
+        rows = get_ot_priority_by_date(target_date, shift_type)
+    if name:
+        kw = name.strip().lower()
+        uid_set = {uid for uid, u in users_map.items() if kw in u["name"].lower()}
+        rows = [r for r in rows if r["user_id"] in uid_set]
+    return {"ot_priority": rows, "users": {uid: u["name"] for uid, u in users_map.items()}}
 
 
 @app.post("/api/schedules/import")
@@ -945,11 +981,29 @@ async def api_respond_swap_request(
 
     if req["request_type"] == "ot_priority":
         # OT priority swap: execute immediately
-        ot_a = get_ot_priority_by_id(req["ot_priority_id"])
-        ot_b = get_ot_priority_by_id(req["target_ot_priority_id"])
+        ot_a = get_ot_priority_by_id(req["ot_priority_id"])   # requester's slot
+        ot_b = get_ot_priority_by_id(req["target_ot_priority_id"])  # target's slot
         if not ot_a or not ot_b:
             raise HTTPException(status_code=400, detail="OT priority slots not found")
 
+        # Detect conflicts BEFORE swapping (cross-date: A may already have slot on B's date)
+        conflicts_a = _sb("ot_priority", params={
+            "user_id": f"eq.{req['requester_id']}",
+            "priority_date": f"eq.{ot_b['priority_date']}",
+            "shift_type": f"eq.{ot_b['shift_type']}",
+            "status": "eq.active",
+        }) or []
+        conflict_a = next((r for r in conflicts_a if r["id"] != ot_b["id"]), None)
+
+        conflicts_b = _sb("ot_priority", params={
+            "user_id": f"eq.{req['target_user_id']}",
+            "priority_date": f"eq.{ot_a['priority_date']}",
+            "shift_type": f"eq.{ot_a['shift_type']}",
+            "status": "eq.active",
+        }) or []
+        conflict_b = next((r for r in conflicts_b if r["id"] != ot_a["id"]), None)
+
+        # Main swap
         requests.patch(
             f"{SUPABASE_URL}/rest/v1/ot_priority",
             headers=SUPABASE_HEADERS,
@@ -964,6 +1018,26 @@ async def api_respond_swap_request(
             json={"user_id": ot_a["user_id"]},
             timeout=10,
         )
+
+        # Secondary swap to resolve duplicate slots caused by cross-date swap
+        secondary_msg = ""
+        if conflict_a and conflict_b:
+            requests.patch(
+                f"{SUPABASE_URL}/rest/v1/ot_priority",
+                headers=SUPABASE_HEADERS,
+                params={"id": f"eq.{conflict_a['id']}"},
+                json={"user_id": req["target_user_id"]},
+                timeout=10,
+            )
+            requests.patch(
+                f"{SUPABASE_URL}/rest/v1/ot_priority",
+                headers=SUPABASE_HEADERS,
+                params={"id": f"eq.{conflict_b['id']}"},
+                json={"user_id": req["requester_id"]},
+                timeout=10,
+            )
+            secondary_msg = f"（同時已自動對調 {ot_b['priority_date']} 第{conflict_a['priority_order']}順位 與 {ot_a['priority_date']} 第{conflict_b['priority_order']}順位）"
+
         update_swap_request(request_id, {
             "status": "approved",
             "peer_response": "accepted",
@@ -978,8 +1052,8 @@ async def api_respond_swap_request(
         # Notify requester
         requester = get_user_by_id(req["requester_id"])
         if requester and requester.get("line_user_id"):
-            push_message(requester["line_user_id"], f"您的換加班順位申請 [{str(request_id)[:8]}] 已完成，對方已同意並執行。")
-        push_message(user["line_user_id"], f"換加班順位申請 [{str(request_id)[:8]}] 已完成。")
+            push_message(requester["line_user_id"], f"您的換加班順位申請 [{str(request_id)[:8]}] 已完成，對方已同意並執行。{secondary_msg}")
+        push_message(user["line_user_id"], f"換加班順位申請 [{str(request_id)[:8]}] 已完成。{secondary_msg}")
         return {"status": "approved"}
 
     else:

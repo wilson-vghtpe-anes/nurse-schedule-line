@@ -29,6 +29,10 @@ input[type=date], select { border: 1px solid #ddd; border-radius: 8px; padding: 
 .ot-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #f0f0f0; font-size: .88rem; }
 .ot-row:last-child { border-bottom: none; }
 .ot-rank { font-weight: 700; color: #1565c0; width: 28px; }
+.ot-select-row { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #f0f0f0; cursor: pointer; font-size: .88rem; }
+.ot-select-row:last-child { border-bottom: none; }
+.ot-select-row:hover { background: #f5f5f5; }
+.ot-select-row.selected { background: #e8f5e9; }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: .75rem; }
 .badge-green { background: #e8f5e9; color: #2e7d32; }
 .badge-blue { background: #e3f2fd; color: #1565c0; }
@@ -112,9 +116,15 @@ textarea { resize: vertical; min-height: 60px; }
 
 <!-- Tab: 加班順位 -->
 <div id="tab-ot-priority" class="tab-content">
-  <div class="date-row">
-    <label>日期</label>
-    <input type="date" id="ot-date">
+  <div class="date-row" style="flex-wrap:wrap;gap:6px">
+    <label>開始</label>
+    <input type="date" id="ot-start">
+    <label>結束</label>
+    <input type="date" id="ot-end">
+  </div>
+  <div class="date-row" style="margin-top:6px">
+    <input type="text" id="ot-name" placeholder="姓名篩選" list="ot-name-list" style="flex:1;padding:6px 10px;border:1px solid #ddd;border-radius:8px;font-size:.9rem">
+    <datalist id="ot-name-list"></datalist>
     <button class="btn btn-primary btn-sm" onclick="loadOtPriority()">查詢</button>
   </div>
   <div id="ot-priority-list"></div>
@@ -123,6 +133,33 @@ textarea { resize: vertical; min-height: 60px; }
 <!-- Tab: 我的申請 -->
 <div id="tab-my-requests" class="tab-content">
   <div id="my-requests-list"></div>
+</div>
+
+<!-- Modal: 換加班順位申請 -->
+<div class="modal-overlay" id="ot-swap-modal">
+  <div class="modal">
+    <h3>申請交換加班順位</h3>
+    <input type="hidden" id="ot-swap-their-id">
+    <input type="hidden" id="ot-swap-my-id">
+    <input type="hidden" id="ot-swap-target-user-id">
+    <input type="hidden" id="ot-swap-their-date">
+    <input type="hidden" id="ot-swap-their-shift">
+    <div style="background:#f0f7ff;padding:10px;border-radius:8px;margin-bottom:12px">
+      <div style="font-size:.8rem;color:#888">申請交換的目標</div>
+      <div id="ot-swap-their-label" style="font-weight:600;margin-top:4px"></div>
+    </div>
+    <div style="font-size:.85rem;color:#555;margin-bottom:8px">選擇您要提供的加班順位：</div>
+    <div id="ot-swap-my-list" style="max-height:200px;overflow-y:auto;border:1px solid #eee;border-radius:8px;margin-bottom:12px"></div>
+    <div id="ot-swap-warning" style="display:none;background:#fff8e1;border:1px solid #ffc107;border-radius:8px;padding:10px;font-size:.82rem;line-height:1.5;margin-bottom:12px"></div>
+    <div class="form-group">
+      <label>備註原因（選填）</label>
+      <textarea id="ot-swap-reason" placeholder="說明換順位原因…"></textarea>
+    </div>
+    <div class="modal-btns">
+      <button class="btn btn-gray" style="flex:1" onclick="closeOtSwapModal()">取消</button>
+      <button class="btn btn-primary" style="flex:1" id="ot-swap-submit" disabled onclick="submitOtSwap()">送出申請</button>
+    </div>
+  </div>
 </div>
 
 <!-- Modal: 換班申請 -->
@@ -162,6 +199,7 @@ let me = null;
 let usersMap = {};
 let allScheduleData = [];
 let otPriorityData = [];
+let myOtData = [];
 let myMode = "week";
 let swapCallback = null;
 
@@ -179,9 +217,9 @@ let swapCallback = null;
     return;
   }
 
-  document.getElementById("all-date").value = today();
-  document.getElementById("ot-date").value = today();
-  await Promise.all([loadMySchedule(), loadAllSchedule(), loadOtPriority(), loadMyRequests()]);
+  document.getElementById("ot-start").value = today();
+  document.getElementById("ot-end").value = today();
+  await Promise.all([loadMySchedule(), loadOtPriority(), loadMyRequests()]);
   loading(false);
 })();
 
@@ -285,35 +323,55 @@ function renderAllSchedule(rows, el) {
 
 async function loadOtPriority() {
   const el = document.getElementById("ot-priority-list");
-  const dateVal = document.getElementById("ot-date").value || today();
+  const s = document.getElementById("ot-start").value;
+  const e = document.getElementById("ot-end").value;
+  const name = document.getElementById("ot-name").value.trim();
+  if (!s || !e) { el.innerHTML = '<p class="empty">請選擇開始與結束日期</p>'; return; }
   loading(true);
   try {
-    const data = await apiFetch(`/api/ot-priority?date=${dateVal}`);
-    usersMap = { ...usersMap, ...data.users };
+    let url = `/api/ot-priority?start=${s}&end=${e}`;
+    if (name) url += `&name=${encodeURIComponent(name)}`;
+    const data = await apiFetch(url);
+    usersMap = { ...usersMap, ...(data.users || {}) };
     otPriorityData = data.ot_priority;
+    const dl = document.getElementById("ot-name-list");
+    dl.innerHTML = Object.values(data.users || {}).map(n => `<option value="${n}">`).join("");
     renderOtPriority(data.ot_priority, el);
   } catch { el.innerHTML = '<p class="empty">載入失敗</p>'; }
   loading(false);
 }
 
 function renderOtPriority(rows, el) {
-  if (!rows.length) { el.innerHTML = '<p class="empty">此日無加班順位資料</p>'; return; }
-  const groups = {};
-  rows.forEach(r => { const k = r.shift_type || "—"; if (!groups[k]) groups[k] = []; groups[k].push(r); });
-  el.innerHTML = Object.entries(groups).map(([shift, group]) =>
-    `<div class="card" style="margin-bottom:10px">
-      <div style="font-weight:600;color:#06c755;margin-bottom:6px">【${shift}】</div>` +
-    group.map(r => {
-      const name = usersMap[r.user_id] || "?";
-      return `<div class="ot-row">
-        <div style="display:flex;align-items:center;gap:12px">
-          <span class="ot-rank">${r.priority_order}</span>
-          <span>${name}</span>
-        </div>
-        ${r.user_id !== me.id ? `<button class="btn btn-sm btn-outline" onclick="openOtSwap('${r.id}','${r.user_id}','${name}',${r.priority_order},'${shift}')">換順位</button>` : ""}
-      </div>`;
-    }).join("") + "</div>"
-  ).join("");
+  if (!rows.length) { el.innerHTML = '<p class="empty">此期間無加班順位資料</p>'; return; }
+  const byDate = {};
+  rows.forEach(r => {
+    if (!byDate[r.priority_date]) byDate[r.priority_date] = {};
+    const k = r.shift_type || "—";
+    if (!byDate[r.priority_date][k]) byDate[r.priority_date][k] = [];
+    byDate[r.priority_date][k].push(r);
+  });
+  el.innerHTML = Object.keys(byDate).sort().map(d => {
+    const shifts = Object.keys(byDate[d]).sort((a,b) => shiftSortKey(a) - shiftSortKey(b));
+    return `<div class="card" style="margin-bottom:10px">
+      <div style="font-size:.82rem;color:#888;margin-bottom:8px">${formatDate(d)}</div>
+      ${shifts.map(shift => {
+        const group = byDate[d][shift].sort((a,b) => a.priority_order - b.priority_order);
+        return `<div style="margin-bottom:8px">
+          <div style="font-weight:600;color:#06c755;margin-bottom:4px">【${shift}】</div>
+          ${group.map(r => {
+            const name = usersMap[r.user_id] || "?";
+            return `<div class="ot-row">
+              <div style="display:flex;align-items:center;gap:12px">
+                <span class="ot-rank">${r.priority_order}</span>
+                <span>${name}</span>
+              </div>
+              ${r.user_id !== me.id ? `<button class="btn btn-sm btn-outline" onclick="openOtSwap('${r.id}','${r.user_id}','${name}',${r.priority_order},'${shift}','${d}')">換順位</button>` : ""}
+            </div>`;
+          }).join("")}
+        </div>`;
+      }).join("")}
+    </div>`;
+  }).join("");
 }
 
 async function loadMyRequests() {
@@ -374,22 +432,93 @@ function openShiftSwap(theirScheduleId, theirUserId, theirName, theirShift, date
   document.getElementById("swap-modal").classList.add("open");
 }
 
-function openOtSwap(theirOtId, theirUserId, theirName, theirOrder, theirShift) {
-  const dateVal = document.getElementById("ot-date").value || today();
-  const myOt = otPriorityData.find(r => r.user_id === me.id && r.shift_type === theirShift);
-  if (!myOt) {
-    showToast(`您在此日【${theirShift}】無加班順位可交換`, false);
+async function openOtSwap(theirOtId, theirUserId, theirName, theirOrder, theirShift, theirDate) {
+  loading(true);
+  try {
+    const month = theirDate.slice(0, 7);
+    const data = await apiFetch(`/api/ot-priority/me?month=${month}`);
+    myOtData = data.ot_priority || [];
+  } catch {
+    showToast("載入失敗", false);
+    loading(false);
     return;
   }
-  document.getElementById("swap-type").value = "ot_priority";
-  document.getElementById("swap-my-slot-id").value = myOt.id;
-  document.getElementById("swap-their-slot-id").value = theirOtId;
-  document.getElementById("swap-target-user-id").value = theirUserId;
-  document.getElementById("swap-modal-title").textContent = "發換加班順位請求";
-  document.getElementById("swap-my-slot-label").textContent = `${dateVal}【${theirShift}】第 ${myOt.priority_order} 順位`;
-  document.getElementById("swap-their-slot-label").textContent = `${theirName}：${dateVal}【${theirShift}】第 ${theirOrder} 順位`;
-  document.getElementById("swap-reason").value = "";
-  document.getElementById("swap-modal").classList.add("open");
+  loading(false);
+
+  document.getElementById("ot-swap-their-id").value = theirOtId;
+  document.getElementById("ot-swap-target-user-id").value = theirUserId;
+  document.getElementById("ot-swap-their-date").value = theirDate;
+  document.getElementById("ot-swap-their-shift").value = theirShift;
+  document.getElementById("ot-swap-their-label").textContent = `${theirName}：${formatDate(theirDate)}【${theirShift}】第 ${theirOrder} 順位`;
+  document.getElementById("ot-swap-my-id").value = "";
+  document.getElementById("ot-swap-warning").style.display = "none";
+  document.getElementById("ot-swap-submit").disabled = true;
+  document.getElementById("ot-swap-reason").value = "";
+
+  const listEl = document.getElementById("ot-swap-my-list");
+  if (!myOtData.length) {
+    listEl.innerHTML = '<p class="empty" style="padding:12px">當月無加班順位記錄</p>';
+  } else {
+    listEl.innerHTML = myOtData.map(r =>
+      `<div class="ot-select-row" id="ot-sel-${r.id}" onclick="selectMyOtSlot('${r.id}','${r.priority_date}','${r.shift_type}',${r.priority_order})">
+        <span style="color:#888;font-size:.82rem;min-width:70px">${formatDate(r.priority_date)}</span>
+        <span class="shift-tag">${r.shift_type}</span>
+        <span>第 ${r.priority_order} 順位</span>
+      </div>`).join("");
+  }
+  document.getElementById("ot-swap-modal").classList.add("open");
+}
+
+function selectMyOtSlot(myOtId, myDate, myShift, myOrder) {
+  document.querySelectorAll(".ot-select-row").forEach(el => el.classList.remove("selected"));
+  document.getElementById("ot-sel-" + myOtId).classList.add("selected");
+  document.getElementById("ot-swap-my-id").value = myOtId;
+
+  const theirDate = document.getElementById("ot-swap-their-date").value;
+  const theirShift = document.getElementById("ot-swap-their-shift").value;
+  const conflict = myOtData.find(r => r.priority_date === theirDate && r.shift_type === theirShift);
+  const warnEl = document.getElementById("ot-swap-warning");
+  if (conflict) {
+    warnEl.innerHTML = `⚠️ 您在 ${formatDate(theirDate)}【${theirShift}】已有第 ${conflict.priority_order} 順位。` +
+      `交換完成後，系統將自動對調此順位與對方在 ${formatDate(myDate)}【${myShift}】的對應順位。`;
+    warnEl.style.display = "";
+  } else {
+    warnEl.style.display = "none";
+  }
+  document.getElementById("ot-swap-submit").disabled = false;
+}
+
+function closeOtSwapModal() {
+  document.getElementById("ot-swap-modal").classList.remove("open");
+}
+
+async function submitOtSwap() {
+  const myOtId = document.getElementById("ot-swap-my-id").value;
+  const theirOtId = document.getElementById("ot-swap-their-id").value;
+  const targetUserId = document.getElementById("ot-swap-target-user-id").value;
+  const reason = document.getElementById("ot-swap-reason").value;
+  if (!myOtId) { showToast("請選擇您要提供的順位", false); return; }
+  loading(true);
+  try {
+    await apiFetch("/api/swap-requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request_type: "ot_priority",
+        ot_priority_id: myOtId,
+        target_ot_priority_id: theirOtId,
+        target_user_id: targetUserId,
+        reason: reason || null,
+      }),
+    });
+    closeOtSwapModal();
+    showToast("申請已送出，等待對方確認");
+    await loadMyRequests();
+    switchTab("my-requests");
+  } catch (e) {
+    showToast("送出失敗：" + e.message, false);
+  }
+  loading(false);
 }
 
 function closeSwapModal() {
