@@ -379,6 +379,8 @@ def detect_excel_format(wb, year: int, month: int) -> dict | None:
         return None
 
 
+OFF_SHIFTS = {"off", "休", "公休", "休假", "例休", "補休", "off日", "休日"}
+
 def _parse_wide_schedule(ws, cfg: dict, shift_map: dict, version: str, year: int, month: int) -> list:
     headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
     date_cols = {}
@@ -408,7 +410,7 @@ def _parse_wide_schedule(ws, cfg: dict, shift_map: dict, version: str, year: int
                 continue
             raw_shift = str(row[ci] or "").strip()
             shift = shift_map.get(raw_shift, raw_shift)
-            if not shift:
+            if not shift or shift.lower() in OFF_SHIFTS:
                 continue
             schedules.append({
                 "date_str": date_str,
@@ -437,7 +439,7 @@ def _parse_long_schedule(ws, cfg: dict, shift_map: dict, version: str) -> list:
         shift = shift_map.get(raw_shift, raw_shift)
         area = str(row[area_ci] or "").strip() if area_ci >= 0 and area_ci < len(row) else ""
 
-        if not raw_date or not name or not shift:
+        if not raw_date or not name or not shift or shift.lower() in OFF_SHIFTS:
             continue
         if isinstance(raw_date, (date, datetime)):
             date_str = raw_date.strftime("%Y-%m-%d") if isinstance(raw_date, datetime) else raw_date.isoformat()
@@ -741,6 +743,7 @@ async def api_schedules(
     date: Optional[str] = None,
     start: Optional[str] = None,
     end: Optional[str] = None,
+    name: Optional[str] = None,
     user=Depends(get_current_user),
 ):
     today_str = datetime.today().strftime("%Y-%m-%d")
@@ -751,6 +754,10 @@ async def api_schedules(
     else:
         rows = get_schedules_by_date(today_str)
     users_map = _build_users_map()
+    if name:
+        kw = name.strip().lower()
+        uid_set = {uid for uid, u in users_map.items() if kw in u["name"].lower()}
+        rows = [r for r in rows if r["user_id"] in uid_set]
     return {"schedules": rows, "users": {uid: u["name"] for uid, u in users_map.items()}}
 
 

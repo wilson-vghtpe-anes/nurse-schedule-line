@@ -96,9 +96,15 @@ textarea { resize: vertical; min-height: 60px; }
 
 <!-- Tab: 全員班表 -->
 <div id="tab-all-schedule" class="tab-content">
-  <div class="date-row">
-    <label>日期</label>
-    <input type="date" id="all-date">
+  <div class="date-row" style="flex-wrap:wrap;gap:6px">
+    <label>開始</label>
+    <input type="date" id="all-start">
+    <label>結束</label>
+    <input type="date" id="all-end">
+  </div>
+  <div class="date-row" style="margin-top:6px">
+    <input type="text" id="all-name" placeholder="姓名篩選" list="all-name-list" style="flex:1;padding:6px 10px;border:1px solid #ddd;border-radius:8px;font-size:.9rem">
+    <datalist id="all-name-list"></datalist>
     <button class="btn btn-primary btn-sm" onclick="loadAllSchedule()">查詢</button>
   </div>
   <div id="all-schedule-list"></div>
@@ -229,35 +235,50 @@ function renderMySchedule(rows, el) {
       ${byDate[d].map(r => `
         <div class="shift-row">
           <span class="shift-tag">${r.shift_type}</span>
-          <span style="color:#555">${r.area || ""}</span>
         </div>`).join("")}
     </div>`).join("");
 }
 
+const SHIFT_ORDER = ["7-3","9-5","10-6","12-8","3-11","11-7"];
+function shiftSortKey(s) { const i = SHIFT_ORDER.indexOf(s); return i >= 0 ? i : SHIFT_ORDER.length; }
+
 async function loadAllSchedule() {
   const el = document.getElementById("all-schedule-list");
-  const dateVal = document.getElementById("all-date").value || today();
+  const s = document.getElementById("all-start").value;
+  const e = document.getElementById("all-end").value;
+  const name = document.getElementById("all-name").value.trim();
+  if (!s || !e) { el.innerHTML = '<p class="empty">請選擇開始與結束日期</p>'; return; }
   loading(true);
   try {
-    const data = await apiFetch(`/api/schedules?date=${dateVal}`);
+    let url = `/api/schedules?start=${s}&end=${e}`;
+    if (name) url += `&name=${encodeURIComponent(name)}`;
+    const data = await apiFetch(url);
     usersMap = { ...usersMap, ...data.users };
     allScheduleData = data.schedules;
-    renderAllSchedule(data.schedules, el, dateVal);
+    const dl = document.getElementById("all-name-list");
+    dl.innerHTML = Object.values(data.users).map(n => `<option value="${n}">`).join("");
+    renderAllSchedule(data.schedules, el);
   } catch { el.innerHTML = '<p class="empty">載入失敗</p>'; }
   loading(false);
 }
 
-function renderAllSchedule(rows, el, dateVal) {
-  if (!rows.length) { el.innerHTML = '<p class="empty">此日無班表資料</p>'; return; }
-  el.innerHTML = rows.map(r => {
-    const name = usersMap[r.user_id] || "?";
-    return `<div class="card shift-row">
-      <div>
-        <span style="font-weight:600">${name}</span>
-        <span style="margin-left:10px" class="shift-tag">${r.shift_type}</span>
-        ${r.area ? `<span style="color:#888;font-size:.8rem;margin-left:6px">${r.area}</span>` : ""}
-      </div>
-      ${r.user_id !== me.id ? `<button class="btn btn-sm btn-outline" onclick="openShiftSwap('${r.id}','${r.user_id}','${name}','${r.shift_type}','${dateVal}')">換班</button>` : ""}
+function renderAllSchedule(rows, el) {
+  if (!rows.length) { el.innerHTML = '<p class="empty">此期間無班表資料</p>'; return; }
+  const byDate = {};
+  rows.forEach(r => {
+    if (!byDate[r.schedule_date]) byDate[r.schedule_date] = {};
+    if (!byDate[r.schedule_date][r.shift_type]) byDate[r.schedule_date][r.shift_type] = [];
+    byDate[r.schedule_date][r.shift_type].push(r);
+  });
+  el.innerHTML = Object.keys(byDate).sort().map(d => {
+    const shifts = Object.keys(byDate[d]).sort((a,b) => shiftSortKey(a) - shiftSortKey(b));
+    return `<div class="card" style="margin-bottom:10px">
+      <div style="font-size:.82rem;color:#888;margin-bottom:8px">${formatDate(d)}</div>
+      ${shifts.map(shift => `
+        <div style="margin-bottom:5px">
+          <span class="shift-tag">${shift}</span>
+          <span style="margin-left:8px;color:#333">${byDate[d][shift].map(r => usersMap[r.user_id] || "?").join("、")}</span>
+        </div>`).join("")}
     </div>`;
   }).join("");
 }
