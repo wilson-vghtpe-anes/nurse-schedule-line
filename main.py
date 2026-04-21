@@ -159,13 +159,16 @@ def update_schedule_status(schedule_id: str, status: str):
 
 # ── Supabase: OT priority helpers ──────────────────────────────────────────────
 
-def get_ot_priority_by_date(priority_date: str):
-    return _sb("ot_priority", params={
+def get_ot_priority_by_date(priority_date: str, shift_type: str = None):
+    params = {
         "priority_date": f"eq.{priority_date}",
         "status": "eq.active",
-        "order": "priority_order",
-        "select": "id,priority_date,user_id,priority_order,source_version",
-    }) or []
+        "order": "shift_type,priority_order",
+        "select": "id,priority_date,user_id,shift_type,priority_order,source_version",
+    }
+    if shift_type:
+        params["shift_type"] = f"eq.{shift_type}"
+    return _sb("ot_priority", params=params) or []
 
 
 def get_ot_priority_by_id(ot_priority_id: str):
@@ -332,6 +335,7 @@ def parse_schedule_excel(file_bytes: bytes, version: str = "") -> dict:
             raw_date = row[col.get("日期", 0)]
             order = row[col.get("順位", 1)]
             name = str(row[col.get("姓名", 2)] or "").strip()
+            shift_type = str(row[col.get("班別", 3)] or "").strip() if len(row) > col.get("班別", 3) else ""
 
             if not raw_date or order is None or not name:
                 continue
@@ -344,6 +348,7 @@ def parse_schedule_excel(file_bytes: bytes, version: str = "") -> dict:
                 "date_str": date_str,
                 "priority_order": int(order),
                 "name": name,
+                "shift_type": shift_type or None,
                 "source_version": version,
             })
 
@@ -398,8 +403,13 @@ def format_ot_priority(rows: list, all_users: dict) -> str:
     if not rows:
         return "（查無加班順位資料）"
     lines = []
+    current_shift = None
     for r in rows:
         name = all_users.get(r["user_id"], {}).get("name", "?")
+        shift = r.get("shift_type") or "—"
+        if shift != current_shift:
+            lines.append(f"【{shift}】")
+            current_shift = shift
         lines.append(f"  {r['priority_order']}. {name}")
     return "\n".join(lines)
 
@@ -560,10 +570,11 @@ async def api_schedules(
 @app.get("/api/ot-priority")
 async def api_ot_priority(
     date: Optional[str] = None,
+    shift_type: Optional[str] = None,
     user=Depends(get_current_user),
 ):
     target_date = date or datetime.today().strftime("%Y-%m-%d")
-    rows = get_ot_priority_by_date(target_date)
+    rows = get_ot_priority_by_date(target_date, shift_type)
     users_map = _build_users_map()
     return {"date": target_date, "ot_priority": rows, "users": {uid: u["name"] for uid, u in users_map.items()}}
 
@@ -611,6 +622,7 @@ async def api_import_schedules(
         ot_records.append({
             "priority_date": item["date_str"],
             "user_id": uid,
+            "shift_type": item.get("shift_type"),
             "priority_order": item["priority_order"],
             "source_version": item["source_version"],
             "status": "active",

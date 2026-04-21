@@ -277,16 +277,22 @@ async function loadOtPriority() {
 
 function renderOtPriority(rows, el) {
   if (!rows.length) { el.innerHTML = '<p class="empty">此日無加班順位資料</p>'; return; }
-  el.innerHTML = '<div class="card">' + rows.map(r => {
-    const name = usersMap[r.user_id] || "?";
-    return `<div class="ot-row">
-      <div style="display:flex;align-items:center;gap:12px">
-        <span class="ot-rank">${r.priority_order}</span>
-        <span>${name}</span>
-      </div>
-      ${r.user_id !== me.id ? `<button class="btn btn-sm btn-outline" onclick="openOtSwap('${r.id}','${r.user_id}','${name}',${r.priority_order})">換順位</button>` : ""}
-    </div>`;
-  }).join("") + "</div>";
+  const groups = {};
+  rows.forEach(r => { const k = r.shift_type || "—"; if (!groups[k]) groups[k] = []; groups[k].push(r); });
+  el.innerHTML = Object.entries(groups).map(([shift, group]) =>
+    `<div class="card" style="margin-bottom:10px">
+      <div style="font-weight:600;color:#06c755;margin-bottom:6px">【${shift}】</div>` +
+    group.map(r => {
+      const name = usersMap[r.user_id] || "?";
+      return `<div class="ot-row">
+        <div style="display:flex;align-items:center;gap:12px">
+          <span class="ot-rank">${r.priority_order}</span>
+          <span>${name}</span>
+        </div>
+        ${r.user_id !== me.id ? `<button class="btn btn-sm btn-outline" onclick="openOtSwap('${r.id}','${r.user_id}','${name}',${r.priority_order},'${shift}')">換順位</button>` : ""}
+      </div>`;
+    }).join("") + "</div>"
+  ).join("");
 }
 
 async function loadMyRequests() {
@@ -347,11 +353,11 @@ function openShiftSwap(theirScheduleId, theirUserId, theirName, theirShift, date
   document.getElementById("swap-modal").classList.add("open");
 }
 
-function openOtSwap(theirOtId, theirUserId, theirName, theirOrder) {
+function openOtSwap(theirOtId, theirUserId, theirName, theirOrder, theirShift) {
   const dateVal = document.getElementById("ot-date").value || today();
-  const myOt = otPriorityData.find(r => r.user_id === me.id);
+  const myOt = otPriorityData.find(r => r.user_id === me.id && r.shift_type === theirShift);
   if (!myOt) {
-    showToast("您在此日無加班順位可交換", false);
+    showToast(`您在此日【${theirShift}】無加班順位可交換`, false);
     return;
   }
   document.getElementById("swap-type").value = "ot_priority";
@@ -359,8 +365,8 @@ function openOtSwap(theirOtId, theirUserId, theirName, theirOrder) {
   document.getElementById("swap-their-slot-id").value = theirOtId;
   document.getElementById("swap-target-user-id").value = theirUserId;
   document.getElementById("swap-modal-title").textContent = "發換加班順位請求";
-  document.getElementById("swap-my-slot-label").textContent = `${dateVal} 第 ${myOt.priority_order} 順位`;
-  document.getElementById("swap-their-slot-label").textContent = `${theirName}：${dateVal} 第 ${theirOrder} 順位`;
+  document.getElementById("swap-my-slot-label").textContent = `${dateVal}【${theirShift}】第 ${myOt.priority_order} 順位`;
+  document.getElementById("swap-their-slot-label").textContent = `${theirName}：${dateVal}【${theirShift}】第 ${theirOrder} 順位`;
   document.getElementById("swap-reason").value = "";
   document.getElementById("swap-modal").classList.add("open");
 }

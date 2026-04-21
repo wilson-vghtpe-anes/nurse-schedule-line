@@ -31,7 +31,7 @@ From nurse-ot-line-main (read-only):
 
 New tables owned by this service:
 - `schedules` — `id, user_id, schedule_date, shift_type, area, source_version, status, notes`
-- `ot_priority` — `id, priority_date, user_id, priority_order, source_version, status`
+- `ot_priority` — `id, priority_date, user_id, shift_type, priority_order, source_version, status`
 - `swap_requests` — full audit trail for all swap actions
 
 ## Shift Types
