@@ -18,5 +18,5 @@ services:
         sync: false
       - key: API_BASE
         sync: false
-      - key: OPENAI_API_KEY
+      - key: ANTHROPIC_API_KEY
         sync: false

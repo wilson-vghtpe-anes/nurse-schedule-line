@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import openpyxl
-from openai import OpenAI
+import anthropic
 
 load_dotenv()
 
@@ -26,9 +26,9 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 LIFF_ID = os.getenv("LIFF_ID", "")
 API_BASE = os.getenv("API_BASE", "")
 PORT = int(os.getenv("PORT", "10001"))
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
-_openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+_anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 
 SUPABASE_HEADERS = {
     "apikey": SUPABASE_KEY,
@@ -317,7 +317,7 @@ def parse_date_header(raw: str, year: int, month: int) -> str | None:
 
 def detect_excel_format(wb, year: int, month: int) -> dict | None:
     """用 GPT 判讀 Excel 結構，失敗回傳 None。"""
-    if not _openai_client:
+    if not _anthropic_client:
         return None
 
     def _rows_preview(ws, n=4):
@@ -363,13 +363,12 @@ def detect_excel_format(wb, year: int, month: int) -> dict | None:
 }}"""
 
     try:
-        resp = _openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
+        resp = _anthropic_client.messages.create(
+            model="claude-haiku-4-5",
             max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
         )
-        raw = resp.choices[0].message.content.strip()
+        raw = resp.content[0].text.strip()
         raw = re.sub(r"^```[a-z]*\n?", "", raw).rstrip("`").strip()
         return json.loads(raw)
     except Exception:
