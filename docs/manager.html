@@ -807,11 +807,23 @@ function selectMyOtSlot(myOtId, myDate, myShift, myOrder) {
 
   const theirDate = document.getElementById("ot-swap-their-date").value;
   const theirShift = document.getElementById("ot-swap-their-shift").value;
-  const conflict = myOtData.find(r => r.priority_date === theirDate && r.shift_type === theirShift);
   const warnEl = document.getElementById("ot-swap-warning");
+
+  if (myShift !== theirShift) {
+    warnEl.innerHTML = `❌ 班別不同（您的【${myShift}】vs 對方【${theirShift}】），不可交換加班順位。`;
+    warnEl.style.background = "#ffebee";
+    warnEl.style.borderColor = "#ef9a9a";
+    warnEl.style.display = "";
+    document.getElementById("ot-swap-submit").disabled = true;
+    return;
+  }
+
+  const conflict = myOtData.find(r => r.priority_date === theirDate && r.shift_type === theirShift);
   if (conflict) {
     warnEl.innerHTML = `⚠️ 您在 ${formatDate(theirDate)}【${theirShift}】已有第 ${conflict.priority_order} 順位。` +
       `交換完成後，系統將自動對調此順位與對方在 ${formatDate(myDate)}【${myShift}】的對應順位。`;
+    warnEl.style.background = "#fff8e1";
+    warnEl.style.borderColor = "#ffc107";
     warnEl.style.display = "";
   } else {
     warnEl.style.display = "none";

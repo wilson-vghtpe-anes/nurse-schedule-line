@@ -898,6 +898,8 @@ async def api_create_swap_request(
             raise HTTPException(status_code=400, detail="ot_priority_id does not belong to you")
         if not their_slot or their_slot["user_id"] != body.target_user_id:
             raise HTTPException(status_code=400, detail="target_ot_priority_id does not belong to target_user_id")
+        if my_slot.get("shift_type") != their_slot.get("shift_type"):
+            raise HTTPException(status_code=400, detail=f"班別不同（{my_slot.get('shift_type')} vs {their_slot.get('shift_type')}），不可交換加班順位")
 
     data = {
         "request_type": body.request_type,
