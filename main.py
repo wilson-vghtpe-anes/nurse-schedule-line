@@ -1257,6 +1257,14 @@ async def serve_js():
     raise HTTPException(status_code=404)
 
 
+@app.get("/{filename}.png")
+async def serve_png(filename: str):
+    path = os.path.join(DOCS_DIR, f"{filename}.png")
+    if os.path.exists(path):
+        return FileResponse(path, media_type="image/png")
+    raise HTTPException(status_code=404)
+
+
 # ── LINE Webhook ───────────────────────────────────────────────────────────────
 
 def verify_line_signature(body_bytes: bytes, signature: str) -> bool:
