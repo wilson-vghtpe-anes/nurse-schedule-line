@@ -833,7 +833,7 @@ async def api_import_schedules(
         if not uid:
             unmatched_names.add(item["name"])
             continue
-        if item["shift_type"] not in SHIFT_TYPES:
+        if not item["shift_type"] or item["shift_type"].lower() in OFF_SHIFTS:
             invalid_shifts.add(item["shift_type"])
             continue
         schedule_records.append({
