@@ -312,11 +312,13 @@ function renderAllSchedule(rows, el) {
     const shifts = Object.keys(byDate[d]).sort((a,b) => shiftSortKey(a) - shiftSortKey(b));
     return `<div class="card" style="margin-bottom:10px">
       <div style="font-size:.82rem;color:#888;margin-bottom:8px">${formatDate(d)}</div>
-      ${shifts.map(shift => `
-        <div style="margin-bottom:5px">
-          <span class="shift-tag">${shift}</span>
-          <span style="margin-left:8px;color:#333">${byDate[d][shift].map(r => usersMap[r.user_id] || "?").join("、")}</span>
-        </div>`).join("")}
+      ${shifts.map(shift => byDate[d][shift].map(r => {
+        const name = usersMap[r.user_id] || "?";
+        return `<div class="shift-row">
+          <div><span class="shift-tag">${shift}</span><span style="margin-left:8px">${name}</span></div>
+          ${r.user_id !== me.id ? `<button class="btn btn-sm btn-outline" onclick="openShiftSwap('${r.id}','${r.user_id}','${name}','${shift}','${d}')">換班</button>` : ""}
+        </div>`;
+      }).join("")).join("")}
     </div>`;
   }).join("");
 }
