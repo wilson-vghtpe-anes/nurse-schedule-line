@@ -106,9 +106,12 @@ textarea { resize: vertical; min-height: 60px; }
     <label>結束</label>
     <input type="date" id="all-end">
   </div>
-  <div class="date-row" style="margin-top:6px">
-    <input type="text" id="all-name" placeholder="姓名篩選" list="all-name-list" style="flex:1;padding:6px 10px;border:1px solid #ddd;border-radius:8px;font-size:.9rem">
+  <div class="date-row" style="margin-top:6px;flex-wrap:wrap;gap:6px">
+    <input type="text" id="all-name" placeholder="姓名篩選" list="all-name-list" style="flex:1;min-width:80px;padding:6px 10px;border:1px solid #ddd;border-radius:8px;font-size:.9rem">
     <datalist id="all-name-list"></datalist>
+    <select id="all-shift" onchange="filterAllSchedule()" style="padding:6px 8px;border:1px solid #ddd;border-radius:8px;font-size:.9rem">
+      <option value="">全部班別</option>
+    </select>
     <button class="btn btn-primary btn-sm" onclick="loadAllSchedule()">查詢</button>
   </div>
   <div id="all-schedule-list"></div>
@@ -293,11 +296,21 @@ async function loadAllSchedule() {
     const data = await apiFetch(url);
     usersMap = { ...usersMap, ...data.users };
     allScheduleData = data.schedules;
-    const dl = document.getElementById("all-name-list");
-    dl.innerHTML = Object.values(data.users).map(n => `<option value="${n}">`).join("");
-    renderAllSchedule(data.schedules, el);
+    document.getElementById("all-name-list").innerHTML = Object.values(data.users).map(n => `<option value="${n}">`).join("");
+    // 更新班別選單
+    const shifts = [...new Set(data.schedules.map(r => r.shift_type))].sort((a,b) => shiftSortKey(a) - shiftSortKey(b));
+    const sel = document.getElementById("all-shift");
+    const cur = sel.value;
+    sel.innerHTML = `<option value="">全部班別</option>` + shifts.map(s => `<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join("");
+    filterAllSchedule();
   } catch { el.innerHTML = '<p class="empty">載入失敗</p>'; }
   loading(false);
+}
+
+function filterAllSchedule() {
+  const shift = document.getElementById("all-shift").value;
+  const rows = shift ? allScheduleData.filter(r => r.shift_type === shift) : allScheduleData;
+  renderAllSchedule(rows, document.getElementById("all-schedule-list"));
 }
 
 function renderAllSchedule(rows, el) {
