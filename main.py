@@ -330,7 +330,7 @@ def parse_date_header(raw: str, year: int, month: int) -> str | None:
 
 _SHIFT_NORMALIZE = {
     '7~3': '7-3', '10~6': '10-6', '3~11': '3-11',
-    '12~8': '12-8', '9~5': '9-5', '11~7': '11-7',
+    '12~8': '12-8', '9~5': '9-5', '11~7': '11-7', '11~7a': '11-7',
 }
 _OFF_SHIFTS_KNOWN = {'公休', '休假', '例假', '國定假日', '休', '例休', '補休', 'off', '國定'}
 _SHIFT_START_MAP = {7: '7-3', 9: '9-5', 10: '10-6', 12: '12-8', 3: '3-11', 11: '11-7'}
@@ -394,6 +394,37 @@ def _parse_vnhc_wide(ws, version: str, strip_ot_code: bool = False) -> list:
                 'source_version': version,
             })
     return schedules
+
+
+def _parse_vnhc_ot_priorities(ws, version: str) -> list:
+    """從本月 sheet 的班別代碼（如 7~3n35、3~11p8）提取所有班別加班順位，涵蓋全月所有班別。"""
+    date_cols = _find_date_cols(ws)
+    results = []
+    for row in ws.iter_rows(min_row=6, values_only=True):
+        if not any(row):
+            continue
+        name = str(row[1] or '').strip() if len(row) > 1 else ''
+        if not name or name in ('日期', '姓名'):
+            continue
+        for ci, date_str in date_cols.items():
+            if ci >= len(row):
+                continue
+            raw = str(row[ci] or '').strip().strip('.')
+            if not raw:
+                continue
+            m = re.match(r'^(.+?)[np](\d+)$', raw)
+            if not m:
+                continue
+            base, priority = m.group(1), int(m.group(2))
+            shift_type = _SHIFT_NORMALIZE.get(base, base)
+            results.append({
+                'date_str': date_str,
+                'priority_order': priority,
+                'name': name,
+                'shift_type': shift_type,
+                'source_version': version,
+            })
+    return results
 
 
 def _parse_7_3P_sheet(ws, version: str) -> list:
@@ -752,11 +783,7 @@ def parse_schedule_excel(file_bytes: bytes, version: str = "") -> dict:
     known = detect_known_format(wb)
     if known == 'ot_before':
         schedules = _parse_vnhc_wide(wb['本月'], version, strip_ot_code=True) if '本月' in wb.sheetnames else []
-        ot_priority = []
-        if '7_3P' in wb.sheetnames:
-            ot_priority += _parse_7_3P_sheet(wb['7_3P'], version)
-        if '10_6班' in wb.sheetnames:
-            ot_priority += _parse_10_6_sheet(wb['10_6班'], version)
+        ot_priority = _parse_vnhc_ot_priorities(wb['本月'], version) if '本月' in wb.sheetnames else []
         return {
             'schedules': schedules,
             'ot_priority': ot_priority,
