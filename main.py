@@ -328,6 +328,254 @@ def parse_date_header(raw: str, year: int, month: int) -> str | None:
     return f"{year}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
 
 
+_SHIFT_NORMALIZE = {
+    '7~3': '7-3', '10~6': '10-6', '3~11': '3-11',
+    '12~8': '12-8', '9~5': '9-5', '11~7': '11-7',
+}
+_OFF_SHIFTS_KNOWN = {'公休', '休假', '例假', '國定假日', '休', '例休', '補休', 'off', '國定'}
+_SHIFT_START_MAP = {7: '7-3', 9: '9-5', 10: '10-6', 12: '12-8', 3: '3-11', 11: '11-7'}
+
+
+def _normalize_shift_code(raw: str) -> str:
+    base = re.split(r'[np]', raw.strip().strip('.'))[0].strip()
+    return _SHIFT_NORMALIZE.get(base, base)
+
+
+def detect_known_format(wb) -> str:
+    """偵測是否為三種已知醫院班表格式。回傳 'ot_before' | 'ot_after' | 'pure'。"""
+    if '7_3P' in wb.sheetnames or '10_6班' in wb.sheetnames:
+        return 'ot_before'
+    if '本月' in wb.sheetnames:
+        ws = wb['本月']
+        for row in ws.iter_rows(min_row=6, max_row=10, values_only=True):
+            for v in (row[2:10] if len(row) > 2 else []):
+                if isinstance(v, str) and '--' in v:
+                    return 'ot_after'
+    return 'pure'
+
+
+def _find_date_cols(ws) -> dict:
+    """掃描 Row 4（1-indexed）找出所有 datetime 欄，回傳 {col_index: date_str}。"""
+    date_cols = {}
+    for row in ws.iter_rows(min_row=4, max_row=4, values_only=True):
+        for ci, v in enumerate(row):
+            if isinstance(v, (date, datetime)):
+                ds = v.strftime('%Y-%m-%d') if isinstance(v, datetime) else v.isoformat()
+                date_cols[ci] = ds
+    return date_cols
+
+
+def _parse_vnhc_wide(ws, version: str, strip_ot_code: bool = False) -> list:
+    """解析純班別 / 加班前 的「本月」sheet（wide 格式）。"""
+    date_cols = _find_date_cols(ws)
+    if not date_cols:
+        return []
+    schedules = []
+    for row in ws.iter_rows(min_row=6, values_only=True):
+        if not any(row):
+            continue
+        name = str(row[1] or '').strip() if len(row) > 1 else ''
+        if not name or name in ('日期', '姓名'):
+            continue
+        for ci, date_str in date_cols.items():
+            if ci >= len(row):
+                continue
+            raw = str(row[ci] or '').strip()
+            if not raw:
+                continue
+            shift = _normalize_shift_code(raw) if strip_ot_code else _SHIFT_NORMALIZE.get(raw, raw)
+            if not shift or shift.lower() in _OFF_SHIFTS_KNOWN or shift in OFF_SHIFTS:
+                continue
+            schedules.append({
+                'date_str': date_str,
+                'name': name,
+                'shift_type': shift,
+                'area': '',
+                'source_version': version,
+            })
+    return schedules
+
+
+def _parse_7_3P_sheet(ws, version: str) -> list:
+    """解析加班前「7_3P」sheet → 每日 7-3 加班順位清單。"""
+    rows = list(ws.iter_rows(min_row=1, max_row=ws.max_row, values_only=True))
+    if not rows:
+        return []
+    # Row 1: 日期欄在奇數 col index (1, 3, 5...)
+    date_row = rows[0]
+    col_dates = {}  # col_index → date_str
+    for ci, v in enumerate(date_row):
+        if isinstance(v, (date, datetime)):
+            ds = v.strftime('%Y-%m-%d') if isinstance(v, datetime) else v.isoformat()
+            col_dates[ci] = ds
+
+    results = []
+    for row in rows[2:]:  # skip Row 2 (星期)
+        if not any(row):
+            continue
+        # 奇數 col 為順位碼, 偶數+1 col 為護理師名字; 結構: n01|name1|n01|name2...
+        # 實際: col0=碼, col1=名, col2=碼, col3=名, ...
+        # 每兩欄為一個日期的資料
+        for date_col_idx, date_str in col_dates.items():
+            code_col = date_col_idx - 1  # 順位碼在日期欄前一欄
+            name_col = date_col_idx
+            if code_col < 0 or code_col >= len(row):
+                continue
+            code = str(row[code_col] or '').strip()
+            name = str(row[name_col] or '').strip() if name_col < len(row) else ''
+            if not code or not name:
+                continue
+            # 解析順位碼: n01→1, n35→35, S1→101, S2→102
+            m = re.match(r'n(\d+)$', code, re.IGNORECASE)
+            if m:
+                order = int(m.group(1))
+            else:
+                ms = re.match(r'S(\d+)$', code, re.IGNORECASE)
+                order = 100 + int(ms.group(1)) if ms else None
+            if order is None:
+                continue
+            results.append({
+                'date_str': date_str,
+                'priority_order': order,
+                'name': name,
+                'shift_type': '7-3',
+                'source_version': version,
+            })
+    return results
+
+
+def _parse_10_6_sheet(ws, version: str) -> list:
+    """解析加班前「10_6班」sheet → 每日 10-6 加班順位清單。"""
+    rows = list(ws.iter_rows(min_row=1, max_row=ws.max_row, values_only=True))
+    if not rows:
+        return []
+    # Row 1: col 1+ 為日期
+    date_row = rows[0]
+    col_dates = {}  # col_index → date_str
+    for ci, v in enumerate(date_row):
+        if ci == 0:
+            continue
+        if isinstance(v, (date, datetime)):
+            ds = v.strftime('%Y-%m-%d') if isinstance(v, datetime) else v.isoformat()
+            col_dates[ci] = ds
+
+    results = []
+    for row in rows[2:]:  # skip Row 2 (兩頭班/星期)
+        if not any(row):
+            continue
+        code = str(row[0] or '').strip()
+        mp = re.match(r'p(\d+)$', code, re.IGNORECASE)
+        if not mp:
+            continue
+        order = int(mp.group(1))
+        for ci, date_str in col_dates.items():
+            if ci >= len(row):
+                continue
+            name = str(row[ci] or '').strip()
+            if not name:
+                continue
+            results.append({
+                'date_str': date_str,
+                'priority_order': order,
+                'name': name,
+                'shift_type': '10-6',
+                'source_version': version,
+            })
+    return results
+
+
+def _parse_check_sheet(ws) -> dict:
+    """解析加班後「check」sheet，回傳 {(name, date_str): actual_hours}。"""
+    date_cols = _find_date_cols(ws)
+    result = {}
+    for row in ws.iter_rows(min_row=6, values_only=True):
+        if not any(row):
+            continue
+        name = str(row[1] or '').strip() if len(row) > 1 else ''
+        if not name or name in ('日期', '姓名'):
+            continue
+        for ci, date_str in date_cols.items():
+            if ci >= len(row):
+                continue
+            v = row[ci]
+            if v is None or v == 0:
+                continue
+            try:
+                hours = float(v)
+                if hours > 0:
+                    result[(name, date_str)] = hours
+            except (TypeError, ValueError):
+                pass
+    return result
+
+
+def _parse_shift_start(raw: str) -> int | None:
+    """從 '7--6', '7--2休1' 等格式取出起始小時。"""
+    m = re.match(r'(\d+)--', raw)
+    return int(m.group(1)) if m else None
+
+
+def _parse_ot_after(wb, version: str) -> dict:
+    """解析加班後格式，回傳 {schedules, overtime_records}。"""
+    if '本月' not in wb.sheetnames:
+        return {'schedules': [], 'overtime_records': []}
+
+    check_hours = {}
+    if 'check' in wb.sheetnames:
+        check_hours = _parse_check_sheet(wb['check'])
+
+    date_cols = _find_date_cols(wb['本月'])
+    ws = wb['本月']
+    schedules = []
+    overtime_records = []
+
+    for row in ws.iter_rows(min_row=6, values_only=True):
+        if not any(row):
+            continue
+        name = str(row[1] or '').strip() if len(row) > 1 else ''
+        if not name or name in ('日期', '姓名'):
+            continue
+        for ci, date_str in date_cols.items():
+            if ci >= len(row):
+                continue
+            raw = str(row[ci] or '').strip()
+            if not raw or raw.lower() in _OFF_SHIFTS_KNOWN:
+                continue
+            start_h = _parse_shift_start(raw)
+            shift_type = _SHIFT_START_MAP.get(start_h, '其他') if start_h is not None else '其他'
+            schedules.append({
+                'date_str': date_str,
+                'name': name,
+                'shift_type': shift_type,
+                'area': '',
+                'source_version': version,
+            })
+            actual = check_hours.get((name, date_str))
+            if actual is None:
+                continue
+            ot_min = round((actual - 8) * 60)
+            if ot_min == 0:
+                continue
+            overtime_records.append({
+                'date_str': date_str,
+                'name': name,
+                'shift_type': shift_type,
+                'overtime_minutes': ot_min,
+                'record_type': 'overtime' if ot_min > 0 else 'leave_early',
+                'source_version': version,
+            })
+    return {'schedules': schedules, 'overtime_records': overtime_records}
+
+
+def upsert_overtime_records(records: list) -> bool:
+    return requests.post(
+        f"{SUPABASE_URL}/rest/v1/overtime_records",
+        headers={**SUPABASE_HEADERS, "Prefer": "resolution=ignore-duplicates,return=minimal"},
+        json=records,
+        timeout=30,
+    ).status_code < 400
+
+
 def detect_excel_format(wb, year: int, month: int) -> dict | None:
     """用 Claude 判讀 Excel 結構，失敗回傳 None。"""
     print(f"[detect_excel_format] client={'ok' if _anthropic_client else 'None'}, key_set={bool(ANTHROPIC_API_KEY)}")
@@ -499,10 +747,46 @@ def _parse_ot_priority_sheet(ws, version: str) -> list:
 
 def parse_schedule_excel(file_bytes: bytes, version: str = "") -> dict:
     wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-    year, month = infer_year_month(version)
 
+    # 優先嘗試已知固定格式（不呼叫 AI）
+    known = detect_known_format(wb)
+    if known == 'ot_before':
+        schedules = _parse_vnhc_wide(wb['本月'], version, strip_ot_code=True) if '本月' in wb.sheetnames else []
+        ot_priority = []
+        if '7_3P' in wb.sheetnames:
+            ot_priority += _parse_7_3P_sheet(wb['7_3P'], version)
+        if '10_6班' in wb.sheetnames:
+            ot_priority += _parse_10_6_sheet(wb['10_6班'], version)
+        return {
+            'schedules': schedules,
+            'ot_priority': ot_priority,
+            'overtime_records': [],
+            '_debug': {'format': 'ot_before', 'parsed_schedule_count': len(schedules), 'parsed_ot_count': len(ot_priority)},
+        }
+    if known == 'ot_after':
+        result = _parse_ot_after(wb, version)
+        result['ot_priority'] = []
+        result['_debug'] = {
+            'format': 'ot_after',
+            'parsed_schedule_count': len(result['schedules']),
+            'parsed_ot_count': 0,
+            'parsed_overtime_count': len(result['overtime_records']),
+        }
+        return result
+    if known == 'pure' and '本月' in wb.sheetnames:
+        schedules = _parse_vnhc_wide(wb['本月'], version)
+        return {
+            'schedules': schedules,
+            'ot_priority': [],
+            'overtime_records': [],
+            '_debug': {'format': 'pure', 'parsed_schedule_count': len(schedules), 'parsed_ot_count': 0},
+        }
+
+    # Fallback：原有 AI 判讀邏輯
+    year, month = infer_year_month(version)
     fmt = detect_excel_format(wb, year, month)
     debug = {
+        "format": "ai_fallback",
         "sheets_found": wb.sheetnames,
         "ai_detected": fmt is not None,
         "ai_sheet": fmt.get("schedule_sheet") if fmt else None,
@@ -525,11 +809,8 @@ def parse_schedule_excel(file_bytes: bytes, version: str = "") -> dict:
                 schedules = _parse_long_schedule(ws, fmt["long_config"], shift_map, version)
         elif sched_sheet:
             debug["ai_sheet_error"] = f"偵測到的工作表「{sched_sheet}」不存在於檔案中"
-
-        # ot_priority_sheet 暫不解析
     else:
         debug["ai_error"] = "AI 判讀失敗，使用舊版固定格式解析"
-        # Fallback：舊硬碼邏輯
         if "班表" in wb.sheetnames:
             ws = wb["班表"]
             headers = [str(c.value).strip() if c.value else "" for c in next(ws.iter_rows(min_row=1, max_row=1))]
@@ -554,7 +835,7 @@ def parse_schedule_excel(file_bytes: bytes, version: str = "") -> dict:
 
     debug["parsed_schedule_count"] = len(schedules)
     debug["parsed_ot_count"] = len(ot_priorities)
-    return {"schedules": schedules, "ot_priority": ot_priorities, "_debug": debug}
+    return {"schedules": schedules, "ot_priority": ot_priorities, "overtime_records": [], "_debug": debug}
 
 
 # ── Date utilities ─────────────────────────────────────────────────────────────
@@ -859,15 +1140,33 @@ async def api_import_schedules(
             "status": "active",
         })
 
+    overtime_detail_records = []
+    for item in parsed.get("overtime_records", []):
+        uid = users_map.get(item["name"])
+        if not uid:
+            unmatched_names.add(item["name"])
+            continue
+        overtime_detail_records.append({
+            "user_id": uid,
+            "work_date": item["date_str"],
+            "shift_type": item["shift_type"],
+            "overtime_minutes": item["overtime_minutes"],
+            "record_type": item["record_type"],
+            "status": "已核准",
+            "source_version": item.get("source_version", version),
+        })
+
     sched_ok = upsert_schedules(schedule_records) if schedule_records else True
     ot_ok = upsert_ot_priority(ot_records) if ot_records else True
+    ot_detail_ok = upsert_overtime_records(overtime_detail_records) if overtime_detail_records else True
 
     return {
         "schedules_imported": len(schedule_records),
         "ot_priority_imported": len(ot_records),
+        "overtime_records_imported": len(overtime_detail_records),
         "unmatched_names": list(unmatched_names),
         "invalid_shifts": list(invalid_shifts),
-        "success": sched_ok and ot_ok,
+        "success": sched_ok and ot_ok and ot_detail_ok,
         "debug": debug_info,
     }
 
