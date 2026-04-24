@@ -198,6 +198,7 @@ def upsert_ot_priority(records: list):
     return requests.post(
         f"{SUPABASE_URL}/rest/v1/ot_priority",
         headers={**SUPABASE_HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal"},
+        params={"on_conflict": "priority_date,shift_type,priority_order,source_version"},
         json=records,
         timeout=30,
     ).status_code < 400
@@ -547,18 +548,14 @@ def _parse_shift_start(raw: str) -> int | None:
 
 
 def _parse_ot_after(wb, version: str) -> dict:
-    """解析加班後格式，回傳 {schedules, overtime_records}。"""
+    """解析加班後格式，只回傳 {schedules}。
+    overtime_records 由加班申報系統管理，不從 Excel 匯入。"""
     if '本月' not in wb.sheetnames:
-        return {'schedules': [], 'overtime_records': []}
-
-    check_hours = {}
-    if 'check' in wb.sheetnames:
-        check_hours = _parse_check_sheet(wb['check'])
+        return {'schedules': []}
 
     date_cols = _find_date_cols(wb['本月'])
     ws = wb['本月']
     schedules = []
-    overtime_records = []
 
     for row in ws.iter_rows(min_row=6, values_only=True):
         if not any(row):
@@ -581,21 +578,7 @@ def _parse_ot_after(wb, version: str) -> dict:
                 'area': '',
                 'source_version': version,
             })
-            actual = check_hours.get((name, date_str))
-            if actual is None:
-                continue
-            ot_min = round((actual - 8) * 60)
-            if ot_min == 0:
-                continue
-            overtime_records.append({
-                'date_str': date_str,
-                'name': name,
-                'shift_type': shift_type,
-                'overtime_minutes': ot_min,
-                'record_type': 'overtime' if ot_min > 0 else 'leave_early',
-                'source_version': version,
-            })
-    return {'schedules': schedules, 'overtime_records': overtime_records}
+    return {'schedules': schedules}
 
 
 def upsert_overtime_records(records: list) -> bool:
@@ -1167,33 +1150,15 @@ async def api_import_schedules(
             "status": "active",
         })
 
-    overtime_detail_records = []
-    for item in parsed.get("overtime_records", []):
-        uid = users_map.get(item["name"])
-        if not uid:
-            unmatched_names.add(item["name"])
-            continue
-        overtime_detail_records.append({
-            "user_id": uid,
-            "work_date": item["date_str"],
-            "shift_type": item["shift_type"],
-            "overtime_minutes": item["overtime_minutes"],
-            "record_type": item["record_type"],
-            "status": "已核准",
-            "source_version": item.get("source_version", version),
-        })
-
     sched_ok = upsert_schedules(schedule_records) if schedule_records else True
     ot_ok = upsert_ot_priority(ot_records) if ot_records else True
-    ot_detail_ok = upsert_overtime_records(overtime_detail_records) if overtime_detail_records else True
 
     return {
         "schedules_imported": len(schedule_records),
         "ot_priority_imported": len(ot_records),
-        "overtime_records_imported": len(overtime_detail_records),
         "unmatched_names": list(unmatched_names),
         "invalid_shifts": list(invalid_shifts),
-        "success": sched_ok and ot_ok and ot_detail_ok,
+        "success": sched_ok and ot_ok,
         "debug": debug_info,
     }
 
