@@ -150,7 +150,7 @@ def upsert_schedules(records: list):
     return requests.post(
         f"{SUPABASE_URL}/rest/v1/schedules",
         headers={**SUPABASE_HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal"},
-        params={"on_conflict": "user_id,schedule_date"},
+        params={"on_conflict": "user_id,schedule_date,source_version"},
         json=records,
         timeout=30,
     ).status_code < 400
@@ -339,7 +339,7 @@ _SHIFT_NORMALIZE = {
     '7~3': '7-3', '10~6': '10-6', '3~11': '3-11',
     '12~8': '12-8', '9~5': '9-5', '11~7': '11-7', '11~7a': '11-7',
 }
-_OFF_SHIFTS_KNOWN = {'公休', '休假', '例假', '國定假日', '休', '例休', '補休', 'off', '國定'}
+_OFF_SHIFTS_KNOWN = {'公休', '休假', '例假', '國定假日', '休', '例休', '補休', 'off', '國定', '休息日', '排休'}
 _SHIFT_START_MAP = {7: '7-3', 9: '9-5', 10: '10-6', 12: '12-8', 3: '3-11', 11: '11-7'}
 
 
@@ -367,6 +367,9 @@ def _find_date_cols(ws) -> dict:
     for row in ws.iter_rows(min_row=4, max_row=4, values_only=True):
         for ci, v in enumerate(row):
             if isinstance(v, (date, datetime)):
+                year = v.year if isinstance(v, datetime) else v.year
+                if year < 2000:  # 過濾 Excel 公式產生的假日期（如 1900-07-02）
+                    continue
                 ds = v.strftime('%Y-%m-%d') if isinstance(v, datetime) else v.isoformat()
                 date_cols[ci] = ds
     return date_cols
@@ -393,6 +396,8 @@ def _parse_vnhc_wide(ws, version: str, strip_ot_code: bool = False) -> list:
             shift = _normalize_shift_code(raw) if strip_ot_code else _SHIFT_NORMALIZE.get(raw, raw)
             if not shift or shift.lower() in _OFF_SHIFTS_KNOWN or shift in OFF_SHIFTS:
                 continue
+            if shift not in SHIFT_TYPES:
+                shift = '其他'
             schedules.append({
                 'date_str': date_str,
                 'name': name,
