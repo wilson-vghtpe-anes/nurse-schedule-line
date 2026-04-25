@@ -140,6 +140,15 @@ textarea { resize: vertical; min-height: 60px; }
   <div class="date-row" style="margin-top:6px">
     <input type="text" id="ot-name" placeholder="姓名篩選" list="ot-name-list" style="flex:1;padding:6px 10px;border:1px solid #ddd;border-radius:8px;font-size:.9rem">
     <datalist id="ot-name-list"></datalist>
+    <select id="ot-shift-filter" onchange="renderOtPriority(otPriorityData, document.getElementById('ot-priority-list'))" style="padding:6px 10px;border:1px solid #ddd;border-radius:8px;font-size:.9rem">
+      <option value="">全部班別</option>
+      <option value="7-3">7-3</option>
+      <option value="9-5">9-5</option>
+      <option value="10-6">10-6</option>
+      <option value="12-8">12-8</option>
+      <option value="3-11">3-11</option>
+      <option value="11-7">11-7</option>
+    </select>
     <button class="btn btn-primary btn-sm" onclick="loadOtPriority()">查詢</button>
   </div>
   <div id="ot-priority-list"></div>
@@ -472,9 +481,11 @@ async function loadOtPriority() {
 }
 
 function renderOtPriority(rows, el) {
-  if (!rows.length) { el.innerHTML = '<p class="empty">此期間無加班順位資料</p>'; return; }
+  const shiftFilter = document.getElementById("ot-shift-filter")?.value || "";
+  const filtered = shiftFilter ? rows.filter(r => r.shift_type === shiftFilter) : rows;
+  if (!filtered.length) { el.innerHTML = '<p class="empty">此期間無加班順位資料</p>'; return; }
   const byDate = {};
-  rows.forEach(r => {
+  filtered.forEach(r => {
     if (!byDate[r.priority_date]) byDate[r.priority_date] = {};
     const k = r.shift_type || "—";
     if (!byDate[r.priority_date][k]) byDate[r.priority_date][k] = [];

@@ -112,6 +112,7 @@ def get_schedules_by_user_date_range(user_id: str, start: str, end: str):
         ("schedule_date", f"lte.{end}"),
         ("status", "eq.active"),
         ("order", "schedule_date"),
+        ("limit", "10000"),
     ]
     return _sb("schedules", params=params) or []
 
@@ -123,6 +124,7 @@ def _get_schedules_range(start: str, end: str, user_id: str = None):
         ("status", "eq.active"),
         ("order", "schedule_date,user_id"),
         ("select", "id,user_id,schedule_date,shift_type,area,notes,source_version"),
+        ("limit", "10000"),
     ]
     if user_id:
         params.append(("user_id", f"eq.{user_id}"))
@@ -135,6 +137,7 @@ def get_schedules_by_date(schedule_date: str):
         "status": "eq.active",
         "order": "shift_type,user_id",
         "select": "id,user_id,schedule_date,shift_type,area,notes",
+        "limit": "10000",
     }) or []
 
 
@@ -170,6 +173,7 @@ def get_ot_priority_by_date(priority_date: str, shift_type: str = None):
         "status": "eq.active",
         "order": "shift_type,priority_order",
         "select": "id,priority_date,user_id,shift_type,priority_order,source_version",
+        "limit": "10000",
     }
     if shift_type:
         params["shift_type"] = f"eq.{shift_type}"
@@ -188,6 +192,7 @@ def get_ot_priority_range(start: str, end: str, user_id: str = None):
         ("status", "eq.active"),
         ("order", "priority_date,shift_type,priority_order"),
         ("select", "id,priority_date,user_id,shift_type,priority_order,source_version"),
+        ("limit", "10000"),
     ]
     if user_id:
         params.append(("user_id", f"eq.{user_id}"))
