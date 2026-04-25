@@ -150,6 +150,7 @@ def upsert_schedules(records: list):
     return requests.post(
         f"{SUPABASE_URL}/rest/v1/schedules",
         headers={**SUPABASE_HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal"},
+        params={"on_conflict": "user_id,schedule_date"},
         json=records,
         timeout=30,
     ).status_code < 400
