@@ -408,6 +408,14 @@ function renderMySchedule(rows, el) {
 
 const SHIFT_ORDER = ["7-3","9-5","10-6","12-8","3-11","11-7"];
 function shiftSortKey(s) { const i = SHIFT_ORDER.indexOf(s); return i >= 0 ? i : SHIFT_ORDER.length; }
+function formatOtCode(shift, order) {
+  if (shift === "7-3") {
+    if (order >= 200) return `Y${order - 200}`;
+    if (order >= 100) return `S${order - 100}`;
+    return `n${String(order).padStart(2, "0")}`;
+  }
+  return `P${order}`;
+}
 
 async function loadAllSchedule() {
   const el = document.getElementById("all-schedule-list");
@@ -506,7 +514,7 @@ function renderOtPriority(rows, el) {
             const isMe = r.user_id === me.id;
             return `<div class="ot-row">
               <div style="display:flex;align-items:center;gap:12px">
-                <span class="ot-rank">${r.priority_order}</span>
+                <span class="ot-rank">${formatOtCode(r.shift_type, r.priority_order)}</span>
                 <span>${name}</span>
               </div>
               ${!isMe ? `<button class="btn btn-sm btn-outline" onclick="openOtSwap('${r.id}','${r.user_id}','${name}',${r.priority_order},'${shift}','${d}')">換順位</button>` : ""}

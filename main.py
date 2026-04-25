@@ -463,14 +463,15 @@ def _parse_7_3P_sheet(ws, version: str) -> list:
             name = str(row[name_col] or '').strip() if name_col < len(row) else ''
             if not code or not name:
                 continue
-            # 解析順位碼: n01→1, n35→35, S1→101, S2→102
+            # 解析順位碼: n01→1, n35→35, S1→101, S2→102, Y1→201, Y2→202
             m = re.match(r'n(\d+)$', code, re.IGNORECASE)
             if m:
                 order = int(m.group(1))
+            elif re.match(r'S(\d+)$', code, re.IGNORECASE):
+                order = 100 + int(re.match(r'S(\d+)$', code, re.IGNORECASE).group(1))
+            elif re.match(r'Y(\d+)$', code, re.IGNORECASE):
+                order = 200 + int(re.match(r'Y(\d+)$', code, re.IGNORECASE).group(1))
             else:
-                ms = re.match(r'S(\d+)$', code, re.IGNORECASE)
-                order = 100 + int(ms.group(1)) if ms else None
-            if order is None:
                 continue
             results.append({
                 'date_str': date_str,
