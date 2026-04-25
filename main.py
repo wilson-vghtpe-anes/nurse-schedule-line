@@ -96,7 +96,7 @@ def get_user_by_name(name: str):
 
 
 def get_all_users():
-    return _sb("nurses", params={"order": "name"}) or []
+    return _sb("nurses", params={"order": "sort_order.asc.nullslast,name.asc"}) or []
 
 
 def get_reviewers():
