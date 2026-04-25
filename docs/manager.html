@@ -174,9 +174,9 @@ textarea { resize: vertical; min-height: 60px; }
     <div class="upload-area" id="drop-zone" onclick="document.getElementById('file-input').click()">
       <div style="font-size:1.8rem;margin-bottom:6px;">📂</div>
       <div style="font-weight:600;margin-bottom:2px;">點擊或拖曳上傳 Excel</div>
-      <div style="font-size:.78rem;color:#aaa">.xlsx 格式</div>
+      <div style="font-size:.78rem;color:#aaa">.xlsx / .xlsm 格式</div>
     </div>
-    <input type="file" id="file-input" accept=".xlsx,.xls" style="display:none" onchange="handleFileSelect(event)">
+    <input type="file" id="file-input" accept=".xlsx,.xls,.xlsm" style="display:none" onchange="handleFileSelect(event)">
 
     <!-- 解析預覽區 -->
     <div id="import-preview" style="display:none;margin-top:12px;padding:12px;background:#f9f9f9;border-radius:10px;border:1px solid #eee">
@@ -645,7 +645,7 @@ async function uploadFile(file) {
   try {
     const fd = new FormData();
     fd.append("file", file);
-    fd.append("version", file.name.replace(/\.(xlsx|xls)$/i, ""));
+    fd.append("version", file.name.replace(/\.(xlsx|xlsm|xls)$/i, ""));
     fd.append("import_schedules", "0");
     fd.append("import_ot_priority", "0");
     const res = await fetch(window.__API_BASE__ + "/api/schedules/import", {

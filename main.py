@@ -1117,7 +1117,7 @@ async def api_import_schedules(
 ):
     content = await file.read()
     if not version:
-        version = file.filename.replace(".xlsx", "").replace(".xls", "")
+        version = file.filename.replace(".xlsm", "").replace(".xlsx", "").replace(".xls", "")
 
     parsed = parse_schedule_excel(content, version)
     debug_info = parsed.get("_debug", {})
