@@ -350,7 +350,7 @@ def _normalize_shift_code(raw: str) -> str:
 
 def detect_known_format(wb) -> str:
     """偵測是否為三種已知醫院班表格式。回傳 'ot_before' | 'ot_after' | 'pure'。"""
-    if '7_3P' in wb.sheetnames or '10_6班' in wb.sheetnames:
+    if '7_3P' in wb.sheetnames or '10_6班' in wb.sheetnames or '值班列印全' in wb.sheetnames:
         return 'ot_before'
     if '本月' in wb.sheetnames:
         ws = wb['本月']
@@ -477,6 +477,62 @@ def _parse_7_3P_sheet(ws, version: str) -> list:
                 'priority_order': order,
                 'name': name,
                 'shift_type': '7-3',
+                'source_version': version,
+            })
+    return results
+
+
+def _parse_duty_print_full_sheet(ws, version: str, exclude_shifts: set = None) -> list:
+    """解析「值班列印全」sheet → 各班別每日加班順位清單。
+    col 0: {班別}P{順位}（如 12~8P1、3~11P3、11~7aP1）
+    col 1-N: 護理師名字（含字母前後綴，如 C林艾昀S → 林艾昀）
+    """
+    _VALID_SHIFTS = set(_SHIFT_NORMALIZE.values())
+    label_pat = re.compile(r'^(.+?)P(\d+)$')
+    chinese_pat = re.compile(r'[一-鿿㐀-䶿]+')
+
+    rows = list(ws.iter_rows(min_row=1, max_row=ws.max_row, values_only=True))
+    if not rows:
+        return []
+
+    # Row 1: 找連續日期欄（col 1 開始，遇到 None 就停）
+    col_dates = {}
+    for ci, v in enumerate(rows[0][1:], start=1):
+        if isinstance(v, (date, datetime)):
+            col_dates[ci] = v.strftime('%Y-%m-%d') if isinstance(v, datetime) else v.isoformat()
+        elif col_dates:
+            break  # 日期欄結束
+
+    results = []
+    for row in rows[2:]:  # skip Row 1（日期）和 Row 2（星期）
+        if not row or not row[0]:
+            continue
+        m = label_pat.match(str(row[0]).strip())
+        if not m:
+            continue
+        shift_code = m.group(1)
+        priority_order = int(m.group(2))
+        shift_type = _SHIFT_NORMALIZE.get(shift_code, shift_code.replace('~', '-'))
+        if shift_type not in _VALID_SHIFTS:
+            continue
+        if exclude_shifts and shift_type in exclude_shifts:
+            continue
+        for ci, date_str in col_dates.items():
+            if ci >= len(row):
+                continue
+            raw = str(row[ci] or '').strip()
+            if not raw:
+                continue
+            # 取漢字部分，去除字母前後綴（如 C林艾昀S → 林艾昀）
+            found = chinese_pat.findall(raw)
+            name = ''.join(found)
+            if not name:
+                continue
+            results.append({
+                'date_str': date_str,
+                'priority_order': priority_order,
+                'name': name,
+                'shift_type': shift_type,
                 'source_version': version,
             })
     return results
@@ -772,12 +828,34 @@ def parse_schedule_excel(file_bytes: bytes, version: str = "") -> dict:
     known = detect_known_format(wb)
     if known == 'ot_before':
         schedules = _parse_vnhc_wide(wb['本月'], version, strip_ot_code=True) if '本月' in wb.sheetnames else []
-        ot_priority = _parse_vnhc_ot_priorities(wb['本月'], version) if '本月' in wb.sheetnames else []
+
+        # 7-3：優先用 7_3P sheet
+        ot_7_3 = _parse_7_3P_sheet(wb['7_3P'], version) if '7_3P' in wb.sheetnames else []
+
+        # 其他班別：優先用 值班列印全 sheet（排除 7-3）
+        ot_others = _parse_duty_print_full_sheet(wb['值班列印全'], version, exclude_shifts={'7-3'}) \
+                    if '值班列印全' in wb.sheetnames else []
+
+        # Fallback：本月補齊沒資料的班別
+        shifts_covered = {r['shift_type'] for r in ot_7_3 + ot_others}
+        ot_fallback = []
+        if '本月' in wb.sheetnames:
+            all_from_main = _parse_vnhc_ot_priorities(wb['本月'], version)
+            ot_fallback = [r for r in all_from_main if r['shift_type'] not in shifts_covered]
+
+        ot_priority = ot_7_3 + ot_others + ot_fallback
         return {
             'schedules': schedules,
             'ot_priority': ot_priority,
             'overtime_records': [],
-            '_debug': {'format': 'ot_before', 'parsed_schedule_count': len(schedules), 'parsed_ot_count': len(ot_priority)},
+            '_debug': {
+                'format': 'ot_before',
+                'parsed_schedule_count': len(schedules),
+                'parsed_ot_count': len(ot_priority),
+                'ot_7_3_count': len(ot_7_3),
+                'ot_others_count': len(ot_others),
+                'ot_fallback_count': len(ot_fallback),
+            },
         }
     if known == 'ot_after':
         result = _parse_ot_after(wb, version)
