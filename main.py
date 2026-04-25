@@ -9,7 +9,7 @@ from datetime import date, timedelta, datetime
 from typing import Optional
 
 import requests
-from fastapi import FastAPI, Request, HTTPException, Depends, UploadFile, File
+from fastapi import FastAPI, Request, HTTPException, Depends, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
@@ -1108,7 +1108,11 @@ async def api_ot_priority(
 @app.post("/api/schedules/import")
 async def api_import_schedules(
     file: UploadFile = File(...),
-    version: str = "",
+    version: str = Form(""),
+    import_schedules: bool = Form(True),
+    import_ot_priority: bool = Form(True),
+    start_date: str = Form(""),
+    end_date: str = Form(""),
     manager=Depends(require_manager),
 ):
     content = await file.read()
@@ -1123,8 +1127,14 @@ async def api_import_schedules(
     ot_records = []
     unmatched_names = set()
     invalid_shifts = set()
+    all_dates = []
 
     for item in parsed["schedules"]:
+        all_dates.append(item["date_str"])
+        if start_date and item["date_str"] < start_date:
+            continue
+        if end_date and item["date_str"] > end_date:
+            continue
         uid = users_map.get(item["name"])
         if not uid:
             unmatched_names.add(item["name"])
@@ -1142,6 +1152,11 @@ async def api_import_schedules(
         })
 
     for item in parsed["ot_priority"]:
+        all_dates.append(item["date_str"])
+        if start_date and item["date_str"] < start_date:
+            continue
+        if end_date and item["date_str"] > end_date:
+            continue
         uid = users_map.get(item["name"])
         if not uid:
             unmatched_names.add(item["name"])
@@ -1155,12 +1170,17 @@ async def api_import_schedules(
             "status": "active",
         })
 
-    sched_ok = upsert_schedules(schedule_records) if schedule_records else True
-    ot_ok = upsert_ot_priority(ot_records) if ot_records else True
+    sched_ok = upsert_schedules(schedule_records) if (schedule_records and import_schedules) else True
+    ot_ok = upsert_ot_priority(ot_records) if (ot_records and import_ot_priority) else True
 
     return {
-        "schedules_imported": len(schedule_records),
-        "ot_priority_imported": len(ot_records),
+        "schedules_imported": len(schedule_records) if import_schedules else 0,
+        "ot_priority_imported": len(ot_records) if import_ot_priority else 0,
+        "parsed_schedules": len(schedule_records),
+        "parsed_ot_priority": len(ot_records),
+        "parsed_start": min(all_dates) if all_dates else "",
+        "parsed_end": max(all_dates) if all_dates else "",
+        "dry_run": not import_schedules and not import_ot_priority,
         "unmatched_names": list(unmatched_names),
         "invalid_shifts": list(invalid_shifts),
         "success": sched_ok and ot_ok,

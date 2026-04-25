@@ -177,6 +177,27 @@ textarea { resize: vertical; min-height: 60px; }
       <div style="font-size:.78rem;color:#aaa">.xlsx 格式</div>
     </div>
     <input type="file" id="file-input" accept=".xlsx,.xls" style="display:none" onchange="handleFileSelect(event)">
+
+    <!-- 解析預覽區 -->
+    <div id="import-preview" style="display:none;margin-top:12px;padding:12px;background:#f9f9f9;border-radius:10px;border:1px solid #eee">
+      <div id="preview-summary" style="font-size:.85rem;color:#555;margin-bottom:10px;font-weight:600"></div>
+      <div class="date-row" style="margin-bottom:10px;gap:6px;flex-wrap:wrap">
+        <label style="font-size:.85rem;white-space:nowrap">匯入範圍</label>
+        <input type="date" id="import-start" style="padding:5px 8px;border:1px solid #ddd;border-radius:8px;font-size:.85rem">
+        <span style="font-size:.85rem">至</span>
+        <input type="date" id="import-end" style="padding:5px 8px;border:1px solid #ddd;border-radius:8px;font-size:.85rem">
+      </div>
+      <div style="margin-bottom:12px;font-size:.9rem;display:flex;flex-direction:column;gap:6px">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="chk-schedules">匯入班表
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="chk-ot">匯入加班順位
+        </label>
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="confirmImport()">確認匯入</button>
+    </div>
+
     <div id="import-result"></div>
   </div>
 
@@ -609,19 +630,24 @@ async function submitReject() {
 
 // ── Import ─────────────────────────────────────────────────────────────────────
 
+let pendingFile = null;
+
 function handleFileSelect(event) {
   const file = event.target.files[0];
   if (file) uploadFile(file);
 }
 
 async function uploadFile(file) {
-  const resultEl = document.getElementById("import-result");
-  resultEl.innerHTML = "";
+  pendingFile = file;
+  document.getElementById("import-result").innerHTML = "";
+  document.getElementById("import-preview").style.display = "none";
   loading(true);
   try {
     const fd = new FormData();
     fd.append("file", file);
     fd.append("version", file.name.replace(/\.(xlsx|xls)$/i, ""));
+    fd.append("import_schedules", "0");
+    fd.append("import_ot_priority", "0");
     const res = await fetch(window.__API_BASE__ + "/api/schedules/import", {
       method: "POST",
       headers: { "X-Line-User-Id": window._lineUserId },
@@ -629,7 +655,59 @@ async function uploadFile(file) {
     });
     const data = await res.json();
     const d = data.debug || {};
-    const okClass = data.schedules_imported > 0 ? "import-ok" : "import-warn";
+
+    // 顯示預覽區
+    const hasSched = data.parsed_schedules > 0;
+    const hasOt    = data.parsed_ot_priority > 0;
+    document.getElementById("preview-summary").textContent =
+      `解析完成：${data.parsed_start || "—"} ~ ${data.parsed_end || "—"}　班表 ${data.parsed_schedules} 筆 / 加班順位 ${data.parsed_ot_priority} 筆`;
+    document.getElementById("import-start").value = data.parsed_start || "";
+    document.getElementById("import-end").value   = data.parsed_end   || "";
+    document.getElementById("chk-schedules").checked = hasSched;
+    document.getElementById("chk-ot").checked        = hasOt;
+    document.getElementById("import-preview").style.display = "block";
+
+    // 若解析失敗，顯示診斷
+    if (!hasSched && !hasOt) {
+      let dbg = `<div class="import-result import-warn" style="margin-top:10px">
+        ⚠️ 解析結果為空，請確認格式是否正確<br>
+        <span style="font-size:.8rem;color:#888">
+        工作表：${(d.sheets_found||[]).join("、") || "—"}
+        格式：${d.format || "—"}
+        班表 ${d.parsed_schedule_count ?? 0} 筆 / 順位 ${d.parsed_ot_count ?? 0} 筆</span>`;
+      if (d.ai_error)       dbg += `<br><span style="color:#c00;font-size:.8rem">${d.ai_error}</span>`;
+      if (d.ai_sheet_error) dbg += `<br><span style="color:#c00;font-size:.8rem">${d.ai_sheet_error}</span>`;
+      dbg += `</div>`;
+      document.getElementById("import-result").innerHTML = dbg;
+    }
+  } catch (e) {
+    document.getElementById("import-result").innerHTML = `<div class="import-result import-warn">解析失敗：${e.message}</div>`;
+    showToast("解析失敗", false);
+  }
+  loading(false);
+}
+
+async function confirmImport() {
+  if (!pendingFile) return;
+  const resultEl = document.getElementById("import-result");
+  resultEl.innerHTML = "";
+  loading(true);
+  try {
+    const fd = new FormData();
+    fd.append("file", pendingFile);
+    fd.append("version", pendingFile.name.replace(/\.(xlsx|xls)$/i, ""));
+    fd.append("import_schedules",   document.getElementById("chk-schedules").checked ? "1" : "0");
+    fd.append("import_ot_priority", document.getElementById("chk-ot").checked        ? "1" : "0");
+    fd.append("start_date", document.getElementById("import-start").value);
+    fd.append("end_date",   document.getElementById("import-end").value);
+    const res = await fetch(window.__API_BASE__ + "/api/schedules/import", {
+      method: "POST",
+      headers: { "X-Line-User-Id": window._lineUserId },
+      body: fd,
+    });
+    const data = await res.json();
+    const d = data.debug || {};
+    const okClass = (data.schedules_imported > 0 || data.ot_priority_imported > 0) ? "import-ok" : "import-warn";
     let html = `<div class="import-result ${okClass}">
       班表匯入：${data.schedules_imported} 筆，加班順位匯入：${data.ot_priority_imported} 筆
     </div>`;
@@ -639,23 +717,9 @@ async function uploadFile(file) {
     if (data.invalid_shifts && data.invalid_shifts.length) {
       html += `<div class="import-result import-warn">⚠️ 無效班別（已略過）：${data.invalid_shifts.join("、")}</div>`;
     }
-    if (data.schedules_imported === 0 || d.ai_error || d.ai_sheet_error) {
-      let dbg = `<div class="import-result" style="background:#f5f5f5;color:#555;font-size:.8rem;margin-top:6px;">
-        <b>診斷資訊</b><br>
-        工作表：${(d.sheets_found||[]).join("、") || "—"}<br>
-        AI 判讀：${d.ai_detected ? "✅ 成功" : "❌ 失敗（使用舊格式解析）"}<br>`;
-      if (d.ai_detected) {
-        dbg += `偵測到的班表工作表：${d.ai_sheet || "—"}（格式：${d.ai_format || "—"}）<br>`;
-        dbg += `偵測到的加班順位工作表：${d.ai_ot_sheet || "無"}<br>`;
-      }
-      dbg += `Excel 解析筆數：班表 ${d.parsed_schedule_count ?? "—"} 筆 / 加班順位 ${d.parsed_ot_count ?? "—"} 筆<br>`;
-      if (d.ai_error) dbg += `<span style="color:#c00">${d.ai_error}</span><br>`;
-      if (d.ai_sheet_error) dbg += `<span style="color:#c00">${d.ai_sheet_error}</span><br>`;
-      dbg += `</div>`;
-      html += dbg;
-    }
     resultEl.innerHTML = html;
-    showToast(data.schedules_imported > 0 ? "匯入完成" : "匯入完成（請確認診斷資訊）");
+    document.getElementById("import-preview").style.display = "none";
+    showToast((data.schedules_imported > 0 || data.ot_priority_imported > 0) ? "匯入完成" : "匯入完成（0 筆）");
   } catch (e) {
     resultEl.innerHTML = `<div class="import-result import-warn">匯入失敗：${e.message}</div>`;
     showToast("匯入失敗", false);
