@@ -1059,8 +1059,7 @@ def format_schedule_day(rows: list, all_users: dict) -> str:
     for r in rows:
         name = all_users.get(r["user_id"], {}).get("name", "?")
         shift = r["shift_type"]
-        area = f" {r['work_area']}" if r.get("work_area") else ""
-        lines.append(f"  {name}：{shift}{area}")
+        lines.append(f"  {name}：{shift}")
     return "\n".join(lines)
 
 
@@ -1071,8 +1070,7 @@ def format_own_schedule(rows: list, all_users: dict) -> str:
     for r in rows:
         name = all_users.get(r["user_id"], {}).get("name", "?")
         shift = r["shift_type"]
-        area = f" {r['work_area']}" if r.get("work_area") else ""
-        lines.append(f"  {r['schedule_date']} {name}：{shift}{area}")
+        lines.append(f"  {r['schedule_date']} {name}：{shift}")
     return "\n".join(lines)
 
 
@@ -1286,7 +1284,7 @@ async def api_import_schedules(
             "user_id": uid,
             "schedule_date": item["date_str"],
             "shift_type": item["shift_type"],
-            "work_area": item.get("area") or None,
+
             "monthly_code": item.get("monthly_code") or None,
             "ot_seq": item.get("ot_seq") or None,
             "source_version": item["source_version"],
