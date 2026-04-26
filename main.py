@@ -163,12 +163,15 @@ def get_schedule_by_id(schedule_id: str):
 
 
 def upsert_schedules(records: list):
-    return requests.post(
+    r = requests.post(
         f"{SUPABASE_URL}/rest/v1/schedules",
         headers={**SUPABASE_HEADERS, "Prefer": "return=minimal"},
         json=records,
         timeout=30,
-    ).status_code < 400
+    )
+    if r.status_code >= 400:
+        return False, r.text
+    return True, None
 
 
 def delete_schedules_by_version(version: str) -> bool:
@@ -1293,11 +1296,12 @@ async def api_import_schedules(
     sched_ok = True
     sched_inserted = 0
 
+    insert_error = None
     if schedule_records and import_schedules:
         date_min = min(r["schedule_date"] for r in schedule_records)
         date_max = max(r["schedule_date"] for r in schedule_records)
         delete_schedules_by_date_range(date_min, date_max)
-        sched_ok = upsert_schedules(schedule_records)
+        sched_ok, insert_error = upsert_schedules(schedule_records)
         sched_inserted = len(schedule_records) if sched_ok else 0
 
     ot_seq_count = sum(1 for r in schedule_records if r.get("ot_seq"))
@@ -1312,6 +1316,7 @@ async def api_import_schedules(
         "unmatched_names": list(unmatched_names),
         "invalid_shifts": list(invalid_shifts),
         "success": sched_ok,
+        "insert_error": insert_error,
         "debug": debug_info,
     }
 

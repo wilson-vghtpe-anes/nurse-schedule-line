@@ -719,6 +719,9 @@ async function confirmImport() {
     if (data.invalid_shifts && data.invalid_shifts.length) {
       html += `<div class="import-result import-warn">⚠️ 無效班別（已略過）：${data.invalid_shifts.join("、")}</div>`;
     }
+    if (data.insert_error) {
+      html += `<div class="import-result import-warn">❌ 寫入失敗：${data.insert_error}</div>`;
+    }
     resultEl.innerHTML = html;
     document.getElementById("import-preview").style.display = "none";
     showToast(data.schedules_imported > 0 ? "匯入完成" : "匯入完成（0 筆）");
