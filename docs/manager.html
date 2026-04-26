@@ -121,6 +121,8 @@ textarea { resize: vertical; min-height: 60px; }
   <div class="date-row" style="margin-top:6px;flex-wrap:wrap;gap:6px">
     <input type="text" id="all-name" placeholder="姓名篩選" list="all-name-list" style="flex:1;min-width:80px;padding:6px 10px;border:1px solid #ddd;border-radius:8px;font-size:.9rem">
     <datalist id="all-name-list"></datalist>
+    <input type="text" id="all-code" placeholder="代號篩選" list="all-code-list" oninput="filterAllSchedule()" style="width:90px;padding:6px 10px;border:1px solid #ddd;border-radius:8px;font-size:.9rem">
+    <datalist id="all-code-list"></datalist>
     <select id="all-shift" onchange="filterAllSchedule()" style="padding:6px 8px;border:1px solid #ddd;border-radius:8px;font-size:.9rem">
       <option value="">全部班別</option>
     </select>
@@ -445,6 +447,9 @@ async function loadAllSchedule() {
     const cur = sel.value;
     sel.innerHTML = `<option value="">全部班別</option>` + shifts.map(s => `<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join("");
     const areas = [...new Set(data.schedules.map(r => r.work_area).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'zh-TW'));
+    const codes = [...new Set(data.schedules.map(r => r.monthly_code).filter(Boolean))].sort();
+    document.getElementById("all-code-list").innerHTML = codes.map(c => `<option value="${c}">`).join("");
+
     const prevChecked = new Set([...document.querySelectorAll(".area-cb:checked")].map(cb => cb.value));
     document.getElementById("area-checkbox-list").innerHTML = areas.map(a =>
       `<label style="display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;font-size:.85rem">
@@ -458,10 +463,12 @@ async function loadAllSchedule() {
 
 function filterAllSchedule() {
   const shift = document.getElementById("all-shift").value;
+  const code  = document.getElementById("all-code").value.trim().toUpperCase();
   const checkedAreas = [...document.querySelectorAll(".area-cb:checked")].map(cb => cb.value);
   const totalAreas   = document.querySelectorAll(".area-cb").length;
   let rows = allScheduleData;
   if (shift) rows = rows.filter(r => r.shift_type === shift);
+  if (code)  rows = rows.filter(r => r.monthly_code && r.monthly_code.toUpperCase().startsWith(code));
   if (checkedAreas.length > 0 && checkedAreas.length < totalAreas) {
     rows = rows.filter(r => checkedAreas.includes(r.work_area));
   }
@@ -520,7 +527,8 @@ function renderAllSchedule(rows, el) {
         return `<div class="shift-row">
           <div>
             <span class="shift-tag">${shift}</span>
-            <span style="margin-left:8px">${name}</span>
+            ${r.monthly_code ? `<span style="margin-left:8px;font-size:.75rem;color:#1565c0;font-weight:600">${r.monthly_code}</span>` : ""}
+            <span style="margin-left:4px">${name}</span>
             ${r.work_area ? `<span style="margin-left:6px;font-size:.78rem;color:#888;background:#f5f5f5;padding:2px 6px;border-radius:8px">${r.work_area}</span>` : ""}
           </div>
           ${!isMe ? `<button class="btn btn-sm btn-outline" onclick="openShiftSwap('${r.id}','${r.user_id}','${name}','${shift}','${d}')">換班</button>` : ""}
