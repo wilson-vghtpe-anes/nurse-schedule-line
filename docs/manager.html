@@ -82,6 +82,11 @@ textarea { resize: vertical; min-height: 60px; }
 <div id="loading"><div class="spinner"></div></div>
 <div id="toast" class="toast"></div>
 
+<div id="user-header" style="background:#06c755;color:#fff;padding:10px 16px;">
+  <div id="user-name" style="font-weight:600;font-size:.95rem"></div>
+  <div id="user-monthly-code" style="font-size:.78rem;opacity:.85;margin-top:2px"></div>
+</div>
+
 <div class="tabs">
   <button class="tab-btn active" onclick="switchTab('my-schedule')">我的班表</button>
   <button class="tab-btn" onclick="switchTab('all-schedule')">全員班表</button>
@@ -352,6 +357,7 @@ let directSlotB = null;
       window.location.href = "/nurse.html";
       return;
     }
+    document.getElementById("user-name").textContent = me.name || "";
   } catch {
     document.body.innerHTML = '<p style="padding:24px;color:#c00">帳號未綁定或待審核。</p>';
     return;
@@ -405,6 +411,9 @@ async function loadMySchedule() {
     }
     const data = await apiFetch(url);
     usersMap = { ...usersMap, ...(data.users || {}) };
+    const monthlyCode = (data.schedules || []).find(r => r.monthly_code)?.monthly_code;
+    const codeEl = document.getElementById("user-monthly-code");
+    if (codeEl) codeEl.textContent = monthlyCode ? `當月代號：${monthlyCode}` : "";
     renderMySchedule(data.schedules, el);
   } catch { el.innerHTML = '<p class="empty">載入失敗</p>'; }
   loading(false);
@@ -424,8 +433,8 @@ function renderMySchedule(rows, el) {
         <div class="shift-row">
           <div>
             <span class="shift-tag">${r.shift_type}</span>
-            ${r.monthly_code ? `<span style="margin-left:8px;font-size:.75rem;color:#1565c0;font-weight:600">${r.monthly_code}</span>` : ""}
             ${r.work_area ? `<span style="margin-left:6px;font-size:.78rem;color:#888;background:#f5f5f5;padding:2px 6px;border-radius:8px">${r.work_area}</span>` : ""}
+            ${r.ot_seq ? `<span style="margin-left:6px;font-size:.78rem;color:#e65100;background:#fff3e0;padding:2px 6px;border-radius:8px">加班 ${r.ot_seq}</span>` : ""}
           </div>
         </div>`).join("")}
     </div>`).join("");
