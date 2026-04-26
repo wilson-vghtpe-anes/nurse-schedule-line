@@ -149,9 +149,19 @@ def get_schedule_by_id(schedule_id: str):
 def upsert_schedules(records: list):
     return requests.post(
         f"{SUPABASE_URL}/rest/v1/schedules",
-        headers={**SUPABASE_HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal"},
-        params={"on_conflict": "user_id,schedule_date,source_version"},
+        headers={**SUPABASE_HEADERS, "Prefer": "return=minimal"},
         json=records,
+        timeout=30,
+    ).status_code < 400
+
+
+def delete_schedules_by_version(version: str) -> bool:
+    if not version:
+        return True
+    return requests.delete(
+        f"{SUPABASE_URL}/rest/v1/schedules",
+        headers=SUPABASE_HEADERS,
+        params={"source_version": f"eq.{version}"},
         timeout=30,
     ).status_code < 400
 
@@ -203,9 +213,19 @@ def get_ot_priority_range(start: str, end: str, user_id: str = None):
 def upsert_ot_priority(records: list):
     return requests.post(
         f"{SUPABASE_URL}/rest/v1/ot_priority",
-        headers={**SUPABASE_HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal"},
-        params={"on_conflict": "priority_date,shift_type,priority_order,source_version"},
+        headers={**SUPABASE_HEADERS, "Prefer": "return=minimal"},
         json=records,
+        timeout=30,
+    ).status_code < 400
+
+
+def delete_ot_priority_by_version(version: str) -> bool:
+    if not version:
+        return True
+    return requests.delete(
+        f"{SUPABASE_URL}/rest/v1/ot_priority",
+        headers=SUPABASE_HEADERS,
+        params={"source_version": f"eq.{version}"},
         timeout=30,
     ).status_code < 400
 
@@ -1255,12 +1275,24 @@ async def api_import_schedules(
             "status": "active",
         })
 
-    sched_ok = upsert_schedules(schedule_records) if (schedule_records and import_schedules) else True
-    ot_ok = upsert_ot_priority(ot_records) if (ot_records and import_ot_priority) else True
+    sched_ok = True
+    ot_ok = True
+    sched_inserted = 0
+    ot_inserted = 0
+
+    if schedule_records and import_schedules:
+        delete_schedules_by_version(version)
+        sched_ok = upsert_schedules(schedule_records)
+        sched_inserted = len(schedule_records) if sched_ok else 0
+
+    if ot_records and import_ot_priority:
+        delete_ot_priority_by_version(version)
+        ot_ok = upsert_ot_priority(ot_records)
+        ot_inserted = len(ot_records) if ot_ok else 0
 
     return {
-        "schedules_imported": len(schedule_records) if import_schedules else 0,
-        "ot_priority_imported": len(ot_records) if import_ot_priority else 0,
+        "schedules_imported": sched_inserted,
+        "ot_priority_imported": ot_inserted,
         "parsed_schedules": len(schedule_records),
         "parsed_ot_priority": len(ot_records),
         "parsed_start": min(all_dates) if all_dates else "",
