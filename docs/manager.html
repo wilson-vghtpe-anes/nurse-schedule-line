@@ -460,7 +460,13 @@ async function loadAllSchedule() {
     const sel = document.getElementById("all-shift");
     const cur = sel.value;
     sel.innerHTML = `<option value="">全部班別</option>` + shifts.map(s => `<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join("");
-    const areas = [...new Set(data.schedules.map(r => r.work_area).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'zh-TW'));
+    const areas = [...new Set(data.schedules.map(r => r.work_area).filter(Boolean))].sort((a, b) => {
+      const aAR = a.startsWith('AR'), bAR = b.startsWith('AR');
+      if (aAR && bAR) return (parseInt(a.slice(2)) || 0) - (parseInt(b.slice(2)) || 0);
+      if (aAR) return -1;
+      if (bAR) return 1;
+      return a.localeCompare(b, 'zh-TW');
+    });
     const rawCodes = [...new Set(data.schedules.map(r => r.monthly_code).filter(Boolean))];
     const aSubGroups = [...new Set(rawCodes.filter(c => c.startsWith('A')).map(c => c.slice(0, 3)))].sort();
     const allCodeGroups = ['中正', ...aSubGroups, '思源', '八樓', '翼樓', 'NS', 'CS'];
