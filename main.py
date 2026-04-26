@@ -364,8 +364,15 @@ def _parse_week_cell(raw, nurse_code: str):
         return _WEEK_AREA_NORMALIZE.get(area_raw, area_raw) if area_raw else None, None, None
 
     base_tilde = m.group(1)
-    suffix = m.group(2).strip() or None
-    shift_type = _SHIFT_NORMALIZE.get(base_tilde, base_tilde.replace('~', '-'))
+    remainder = m.group(2).strip()
+
+    # 後綴以英文字母開頭才是 ot_seq；否則 remainder 是班別的一部分（如 8~12 1'~5'）
+    if remainder and remainder[0].isalpha():
+        shift_type = _SHIFT_NORMALIZE.get(base_tilde, base_tilde.replace('~', '-'))
+        ot_seq = remainder
+    else:
+        shift_type = shift_raw.replace('~', '-')
+        ot_seq = None
 
     # 正規化 area
     area = _WEEK_AREA_NORMALIZE.get(area_raw, area_raw) if area_raw else None
@@ -373,7 +380,7 @@ def _parse_week_cell(raw, nurse_code: str):
     if area is None:
         area = _WEEK_CODE_PREFIX_AREA.get(nurse_code[0] if nurse_code else '', None)
 
-    return area, shift_type, suffix
+    return area, shift_type, ot_seq
 
 
 def _parse_week_xlsm(wb, version: str) -> dict:
