@@ -121,8 +121,18 @@ textarea { resize: vertical; min-height: 60px; }
   <div class="date-row" style="margin-top:6px;flex-wrap:wrap;gap:6px">
     <input type="text" id="all-name" placeholder="姓名篩選" list="all-name-list" style="flex:1;min-width:80px;padding:6px 10px;border:1px solid #ddd;border-radius:8px;font-size:.9rem">
     <datalist id="all-name-list"></datalist>
-    <input type="text" id="all-code" placeholder="代號篩選" list="all-code-list" oninput="filterAllSchedule()" style="width:90px;padding:6px 10px;border:1px solid #ddd;border-radius:8px;font-size:.9rem">
-    <datalist id="all-code-list"></datalist>
+    <div style="position:relative" id="code-dropdown-wrap">
+      <button type="button" id="code-dropdown-btn" onclick="toggleCodeDropdown()"
+        style="padding:5px 10px;border:1px solid #ddd;border-radius:8px;font-size:.9rem;background:#fff;cursor:pointer;white-space:nowrap">
+        全部代號 ▾
+      </button>
+      <div id="code-dropdown-panel" style="display:none;position:absolute;top:calc(100% + 2px);left:0;background:#fff;border:1px solid #ddd;border-radius:8px;padding:4px 0;z-index:50;min-width:150px;box-shadow:0 2px 8px rgba(0,0,0,.12)">
+        <label style="display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;font-size:.85rem;color:#666;border-bottom:1px solid #f0f0f0">
+          <input type="checkbox" id="code-cb-all" onchange="onCodeAllChange(this.checked)"> 全選
+        </label>
+        <div id="code-checkbox-list"></div>
+      </div>
+    </div>
     <select id="all-shift" onchange="filterAllSchedule()" style="padding:6px 8px;border:1px solid #ddd;border-radius:8px;font-size:.9rem">
       <option value="">全部班別</option>
     </select>
@@ -447,8 +457,24 @@ async function loadAllSchedule() {
     const cur = sel.value;
     sel.innerHTML = `<option value="">全部班別</option>` + shifts.map(s => `<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join("");
     const areas = [...new Set(data.schedules.map(r => r.work_area).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'zh-TW'));
-    const codes = [...new Set(data.schedules.map(r => r.monthly_code).filter(Boolean))].sort();
-    document.getElementById("all-code-list").innerHTML = codes.map(c => `<option value="${c}">`).join("");
+    const rawCodes = [...new Set(data.schedules.map(r => r.monthly_code).filter(Boolean))];
+    const codeGroupSet = new Set();
+    rawCodes.forEach(c => {
+      if (c.startsWith('A'))      codeGroupSet.add(c.slice(0, 3));
+      else if (c.startsWith('B')) codeGroupSet.add('B');
+      else if (c.startsWith('C')) codeGroupSet.add('C');
+      else if (c.startsWith('E')) codeGroupSet.add('E');
+    });
+    const aGroups = [...codeGroupSet].filter(g => g.startsWith('A')).sort();
+    const otherGroups = [...codeGroupSet].filter(g => !g.startsWith('A')).sort();
+    const allCodeGroups = [...aGroups, ...otherGroups, 'NS', 'CS'];
+    const prevCodeChecked = new Set([...document.querySelectorAll(".code-cb:checked")].map(cb => cb.value));
+    document.getElementById("code-checkbox-list").innerHTML = allCodeGroups.map(g =>
+      `<label style="display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;font-size:.85rem">
+        <input type="checkbox" class="code-cb" value="${g}"${prevCodeChecked.has(g) ? ' checked' : ''} onchange="onCodeCbChange()">
+        ${_codeGroupLabel(g)}
+      </label>`).join("");
+    _syncCodeDropdown();
 
     const prevChecked = new Set([...document.querySelectorAll(".area-cb:checked")].map(cb => cb.value));
     document.getElementById("area-checkbox-list").innerHTML = areas.map(a =>
@@ -462,17 +488,72 @@ async function loadAllSchedule() {
 }
 
 function filterAllSchedule() {
-  const shift = document.getElementById("all-shift").value;
-  const code  = document.getElementById("all-code").value.trim().toUpperCase();
+  const shift        = document.getElementById("all-shift").value;
+  const checkedCodes = [...document.querySelectorAll(".code-cb:checked")].map(cb => cb.value);
+  const totalCodes   = document.querySelectorAll(".code-cb").length;
   const checkedAreas = [...document.querySelectorAll(".area-cb:checked")].map(cb => cb.value);
   const totalAreas   = document.querySelectorAll(".area-cb").length;
   let rows = allScheduleData;
   if (shift) rows = rows.filter(r => r.shift_type === shift);
-  if (code)  rows = rows.filter(r => r.monthly_code && r.monthly_code.toUpperCase().startsWith(code));
-  if (checkedAreas.length > 0 && checkedAreas.length < totalAreas) {
+  if (checkedCodes.length > 0 && checkedCodes.length < totalCodes)
+    rows = rows.filter(r => checkedCodes.some(g => _matchesCodeGroup(r.monthly_code, g)));
+  if (checkedAreas.length > 0 && checkedAreas.length < totalAreas)
     rows = rows.filter(r => checkedAreas.includes(r.work_area));
-  }
   renderAllSchedule(rows, document.getElementById("all-schedule-list"));
+}
+
+const _NS_PREFIXES = ['A04','A09','A11','A12','A13','E49','E50'];
+const _CS_PREFIXES = ['A19','A21','A22'];
+
+function _codeGroupLabel(g) {
+  if (g === 'A00') return 'A00（主管）';
+  if (g === 'B')   return 'B（思源）';
+  if (g === 'C')   return 'C（八樓）';
+  if (g === 'E')   return 'E（翼樓）';
+  if (g === 'NS')  return 'NS';
+  if (g === 'CS')  return 'CS';
+  return g;
+}
+
+function _matchesCodeGroup(code, group) {
+  if (!code) return false;
+  if (group === 'NS') return _NS_PREFIXES.some(p => code.startsWith(p));
+  if (group === 'CS') return _CS_PREFIXES.some(p => code.startsWith(p));
+  return code.startsWith(group);
+}
+
+function toggleCodeDropdown() {
+  const panel = document.getElementById("code-dropdown-panel");
+  panel.style.display = panel.style.display === "none" ? "block" : "none";
+}
+
+function onCodeAllChange(checked) {
+  document.querySelectorAll(".code-cb").forEach(cb => cb.checked = checked);
+  _syncCodeDropdown();
+  filterAllSchedule();
+}
+
+function onCodeCbChange() {
+  _syncCodeDropdown();
+  filterAllSchedule();
+}
+
+function _syncCodeDropdown() {
+  const all     = document.querySelectorAll(".code-cb");
+  const checked = document.querySelectorAll(".code-cb:checked");
+  const allCb   = document.getElementById("code-cb-all");
+  const btn     = document.getElementById("code-dropdown-btn");
+  if (!allCb || !btn) return;
+  if (checked.length === 0 || checked.length === all.length) {
+    allCb.checked = checked.length === all.length;
+    allCb.indeterminate = false;
+    btn.textContent = "全部代號 ▾";
+  } else {
+    allCb.checked = false;
+    allCb.indeterminate = true;
+    const names = [...checked].map(cb => cb.value);
+    btn.textContent = names.length <= 3 ? names.join("、") + " ▾" : `已選 ${names.length} 個 ▾`;
+  }
 }
 
 function toggleAreaDropdown() {
@@ -1074,11 +1155,13 @@ async function respondRequest(requestId, response) {
 }
 
 document.addEventListener("click", e => {
-  const wrap = document.getElementById("area-dropdown-wrap");
-  if (wrap && !wrap.contains(e.target)) {
-    const panel = document.getElementById("area-dropdown-panel");
-    if (panel) panel.style.display = "none";
-  }
+  [["area-dropdown-wrap","area-dropdown-panel"],["code-dropdown-wrap","code-dropdown-panel"]].forEach(([wrap, panel]) => {
+    const w = document.getElementById(wrap);
+    if (w && !w.contains(e.target)) {
+      const p = document.getElementById(panel);
+      if (p) p.style.display = "none";
+    }
+  });
 });
 </script>
 </body>
