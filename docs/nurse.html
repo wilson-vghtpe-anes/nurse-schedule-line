@@ -361,14 +361,14 @@ async function loadOtPriority() {
   if (!s || !e) { el.innerHTML = '<p class="empty">請選擇開始與結束日期</p>'; return; }
   loading(true);
   try {
-    let url = `/api/ot-priority?start=${s}&end=${e}`;
+    let url = `/api/schedules?start=${s}&end=${e}`;
     if (name) url += `&name=${encodeURIComponent(name)}`;
     const data = await apiFetch(url);
     usersMap = { ...usersMap, ...(data.users || {}) };
-    otPriorityData = data.ot_priority;
+    otPriorityData = (data.schedules || []).filter(r => r.ot_seq);
     const dl = document.getElementById("ot-name-list");
     dl.innerHTML = Object.values(data.users || {}).map(n => `<option value="${n}">`).join("");
-    renderOtPriority(data.ot_priority, el);
+    renderOtPriority(otPriorityData, el);
   } catch { el.innerHTML = '<p class="empty">載入失敗</p>'; }
   loading(false);
 }
@@ -376,30 +376,31 @@ async function loadOtPriority() {
 function renderOtPriority(rows, el) {
   const shiftFilter = document.getElementById("ot-shift-filter")?.value || "";
   const filtered = shiftFilter ? rows.filter(r => r.shift_type === shiftFilter) : rows;
-  if (!filtered.length) { el.innerHTML = '<p class="empty">此期間無加班順位資料</p>'; return; }
+  if (!filtered.length) { el.innerHTML = '<p class="empty">此期間無加班順序資料</p>'; return; }
   const byDate = {};
   filtered.forEach(r => {
-    if (!byDate[r.priority_date]) byDate[r.priority_date] = {};
+    if (!byDate[r.schedule_date]) byDate[r.schedule_date] = {};
     const k = r.shift_type || "—";
-    if (!byDate[r.priority_date][k]) byDate[r.priority_date][k] = [];
-    byDate[r.priority_date][k].push(r);
+    if (!byDate[r.schedule_date][k]) byDate[r.schedule_date][k] = [];
+    byDate[r.schedule_date][k].push(r);
   });
+  const otSeqNum = r => parseInt((r.ot_seq || '').replace(/\D/g, '') || '0');
   el.innerHTML = Object.keys(byDate).sort().map(d => {
     const shifts = Object.keys(byDate[d]).sort((a,b) => shiftSortKey(a) - shiftSortKey(b));
     return `<div class="card" style="margin-bottom:10px">
       <div style="font-size:.82rem;color:#888;margin-bottom:8px">${formatDate(d)}</div>
       ${shifts.map(shift => {
-        const group = byDate[d][shift].sort((a,b) => a.priority_order - b.priority_order);
+        const group = byDate[d][shift].sort((a,b) => otSeqNum(a) - otSeqNum(b));
         return `<div style="margin-bottom:8px">
           <div style="font-weight:600;color:#06c755;margin-bottom:4px">【${shift}】</div>
           ${group.map(r => {
             const name = usersMap[r.user_id] || "?";
             return `<div class="ot-row">
               <div style="display:flex;align-items:center;gap:12px">
-                <span class="ot-rank">${formatOtCode(r.shift_type, r.priority_order)}</span>
+                <span class="ot-rank">${r.ot_seq}</span>
                 <span>${name}</span>
               </div>
-              ${r.user_id !== me.id ? `<button class="btn btn-sm btn-outline" onclick="openOtSwap('${r.id}','${r.user_id}','${name}',${r.priority_order},'${shift}','${d}')">換順位</button>` : ""}
+              ${r.user_id !== me.id ? `<button class="btn btn-sm btn-outline" onclick="openOtSwap('${r.id}','${r.user_id}','${name}','${r.ot_seq}','${shift}','${d}')">換順序</button>` : ""}
             </div>`;
           }).join("")}
         </div>`;
@@ -424,7 +425,7 @@ function renderMyRequests(reqs, el) {
     const isTarget = r.target_user_id === me.id;
     const rname = r.requester_id ? (usersMap[r.requester_id] || "?") : "系統";
     const tname = r.target_user_id ? (usersMap[r.target_user_id] || "?") : "—";
-    const rtype = r.request_type === "shift" ? "換班" : r.request_type === "ot_priority" ? "換加班順位" : "主管直接調班";
+    const rtype = r.request_type === "shift" ? "換班" : r.request_type === "ot_seq" ? "換加班順序" : "主管直接調班";
     const shortId = r.id.slice(0, 8);
     const canCancel = isRequester && ["submitted", "pending_peer"].includes(r.status);
     const canRespond = isTarget && r.status === "pending_peer";
@@ -466,12 +467,17 @@ function openShiftSwap(theirScheduleId, theirUserId, theirName, theirShift, date
   document.getElementById("swap-modal").classList.add("open");
 }
 
-async function openOtSwap(theirOtId, theirUserId, theirName, theirOrder, theirShift, theirDate) {
+async function openOtSwap(theirScheduleId, theirUserId, theirName, theirOtSeq, theirShift, theirDate) {
   loading(true);
   try {
     const month = theirDate.slice(0, 7);
-    const data = await apiFetch(`/api/ot-priority/me?month=${month}`);
-    myOtData = data.ot_priority || [];
+    const startOfMonth = month + '-01';
+    const tmp = new Date(startOfMonth);
+    tmp.setMonth(tmp.getMonth() + 1);
+    tmp.setDate(tmp.getDate() - 1);
+    const endOfMonth = tmp.toISOString().slice(0, 10);
+    const data = await apiFetch(`/api/schedules/me?mode=range&start=${startOfMonth}&end=${endOfMonth}`);
+    myOtData = (data.schedules || []).filter(r => r.ot_seq);
   } catch {
     showToast("載入失敗", false);
     loading(false);
@@ -479,11 +485,11 @@ async function openOtSwap(theirOtId, theirUserId, theirName, theirOrder, theirSh
   }
   loading(false);
 
-  document.getElementById("ot-swap-their-id").value = theirOtId;
+  document.getElementById("ot-swap-their-id").value = theirScheduleId;
   document.getElementById("ot-swap-target-user-id").value = theirUserId;
   document.getElementById("ot-swap-their-date").value = theirDate;
   document.getElementById("ot-swap-their-shift").value = theirShift;
-  document.getElementById("ot-swap-their-label").textContent = `${theirName}：${formatDate(theirDate)}【${theirShift}】第 ${theirOrder} 順位`;
+  document.getElementById("ot-swap-their-label").textContent = `${theirName}：${formatDate(theirDate)}【${theirShift}】${theirOtSeq}`;
   document.getElementById("ot-swap-my-id").value = "";
   document.getElementById("ot-swap-warning").style.display = "none";
   document.getElementById("ot-swap-submit").disabled = true;
@@ -491,19 +497,19 @@ async function openOtSwap(theirOtId, theirUserId, theirName, theirOrder, theirSh
 
   const listEl = document.getElementById("ot-swap-my-list");
   if (!myOtData.length) {
-    listEl.innerHTML = '<p class="empty" style="padding:12px">當月無加班順位記錄</p>';
+    listEl.innerHTML = '<p class="empty" style="padding:12px">當月無加班順序記錄</p>';
   } else {
     listEl.innerHTML = myOtData.map(r =>
-      `<div class="ot-select-row" id="ot-sel-${r.id}" onclick="selectMyOtSlot('${r.id}','${r.priority_date}','${r.shift_type}',${r.priority_order})">
-        <span style="color:#888;font-size:.82rem;min-width:70px">${formatDate(r.priority_date)}</span>
+      `<div class="ot-select-row" id="ot-sel-${r.id}" onclick="selectMyOtSlot('${r.id}','${r.schedule_date}','${r.shift_type}','${r.ot_seq}')">
+        <span style="color:#888;font-size:.82rem;min-width:70px">${formatDate(r.schedule_date)}</span>
         <span class="shift-tag">${r.shift_type}</span>
-        <span>第 ${r.priority_order} 順位</span>
+        <span>${r.ot_seq}</span>
       </div>`).join("");
   }
   document.getElementById("ot-swap-modal").classList.add("open");
 }
 
-function selectMyOtSlot(myOtId, myDate, myShift, myOrder) {
+function selectMyOtSlot(myOtId, myDate, myShift, myOtSeq) {
   document.querySelectorAll(".ot-select-row").forEach(el => el.classList.remove("selected"));
   document.getElementById("ot-sel-" + myOtId).classList.add("selected");
   document.getElementById("ot-swap-my-id").value = myOtId;
@@ -513,7 +519,7 @@ function selectMyOtSlot(myOtId, myDate, myShift, myOrder) {
   const warnEl = document.getElementById("ot-swap-warning");
 
   if (myShift !== theirShift) {
-    warnEl.innerHTML = `❌ 班別不同（您的【${myShift}】vs 對方【${theirShift}】），不可交換加班順位。`;
+    warnEl.innerHTML = `❌ 班別不同（您的【${myShift}】vs 對方【${theirShift}】），不可交換加班順序。`;
     warnEl.style.background = "#ffebee";
     warnEl.style.borderColor = "#ef9a9a";
     warnEl.style.display = "";
@@ -521,10 +527,10 @@ function selectMyOtSlot(myOtId, myDate, myShift, myOrder) {
     return;
   }
 
-  const conflict = myOtData.find(r => r.priority_date === theirDate && r.shift_type === theirShift);
+  const conflict = myOtData.find(r => r.schedule_date === theirDate && r.shift_type === theirShift);
   if (conflict) {
-    warnEl.innerHTML = `⚠️ 您在 ${formatDate(theirDate)}【${theirShift}】已有第 ${conflict.priority_order} 順位。` +
-      `交換完成後，系統將自動對調此順位與對方在 ${formatDate(myDate)}【${myShift}】的對應順位。`;
+    warnEl.innerHTML = `⚠️ 您在 ${formatDate(theirDate)}【${theirShift}】已有 ${conflict.ot_seq} 順序。` +
+      `交換完成後，系統將自動對調此順序與對方在 ${formatDate(myDate)}【${myShift}】的對應順序。`;
     warnEl.style.background = "#fff8e1";
     warnEl.style.borderColor = "#ffc107";
     warnEl.style.display = "";
@@ -550,9 +556,9 @@ async function submitOtSwap() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        request_type: "ot_priority",
-        ot_priority_id: myOtId,
-        target_ot_priority_id: theirOtId,
+        request_type: "ot_seq",
+        schedule_id: myOtId,
+        target_schedule_id: theirOtId,
         target_user_id: targetUserId,
         reason: reason || null,
       }),
@@ -587,8 +593,8 @@ async function submitSwapRequest() {
     body.schedule_id = mySlotId;
     body.target_schedule_id = theirSlotId;
   } else {
-    body.ot_priority_id = mySlotId;
-    body.target_ot_priority_id = theirSlotId;
+    body.schedule_id = mySlotId;
+    body.target_schedule_id = theirSlotId;
   }
 
   loading(true);
