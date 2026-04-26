@@ -1289,9 +1289,12 @@ async def api_import_schedules(
         sched_ok = upsert_schedules(schedule_records)
         sched_inserted = len(schedule_records) if sched_ok else 0
 
+    ot_seq_count = sum(1 for r in schedule_records if r.get("ot_seq"))
+
     return {
         "schedules_imported": sched_inserted,
         "parsed_schedules": len(schedule_records),
+        "parsed_ot_seq": ot_seq_count,
         "parsed_start": min(all_dates) if all_dates else "",
         "parsed_end": max(all_dates) if all_dates else "",
         "dry_run": not import_schedules,

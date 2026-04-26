@@ -664,7 +664,7 @@ async function uploadFile(file) {
     // 顯示預覽區
     const hasSched = data.parsed_schedules > 0;
     document.getElementById("preview-summary").textContent =
-      `解析完成：${data.parsed_start || "—"} ~ ${data.parsed_end || "—"}　班表 ${data.parsed_schedules} 筆`;
+      `解析完成：${data.parsed_start || "—"} ~ ${data.parsed_end || "—"}　班表 ${data.parsed_schedules} 筆 / 含加班順序 ${data.parsed_ot_seq || 0} 筆`;
     document.getElementById("import-start").value = data.parsed_start || "";
     document.getElementById("import-end").value   = data.parsed_end   || "";
     document.getElementById("chk-schedules").checked = hasSched;
