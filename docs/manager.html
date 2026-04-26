@@ -191,9 +191,6 @@ textarea { resize: vertical; min-height: 60px; }
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
           <input type="checkbox" id="chk-schedules">匯入班表
         </label>
-        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-          <input type="checkbox" id="chk-ot">匯入加班順位
-        </label>
       </div>
       <button class="btn btn-primary btn-sm" onclick="confirmImport()">確認匯入</button>
     </div>
@@ -210,7 +207,7 @@ textarea { resize: vertical; min-height: 60px; }
     <label>班別類型</label>
     <select id="direct-swap-type" onchange="resetDirectSwap()">
       <option value="shift">班表</option>
-      <option value="ot_priority">加班順位</option>
+      <option value="ot_seq">加班順序</option>
     </select>
     <label>日期</label>
     <input type="date" id="direct-date">
@@ -478,14 +475,14 @@ async function loadOtPriority() {
   if (!s || !e) { el.innerHTML = '<p class="empty">請選擇開始與結束日期</p>'; return; }
   loading(true);
   try {
-    let url = `/api/ot-priority?start=${s}&end=${e}`;
+    let url = `/api/schedules?start=${s}&end=${e}`;
     if (name) url += `&name=${encodeURIComponent(name)}`;
     const data = await apiFetch(url);
     usersMap = { ...usersMap, ...(data.users || {}) };
-    otPriorityData = data.ot_priority;
+    otPriorityData = (data.schedules || []).filter(r => r.ot_seq);
     const dl = document.getElementById("ot-name-list");
     dl.innerHTML = Object.values(data.users || {}).map(n => `<option value="${n}">`).join("");
-    renderOtPriority(data.ot_priority, el);
+    renderOtPriority(otPriorityData, el);
   } catch { el.innerHTML = '<p class="empty">載入失敗</p>'; }
   loading(false);
 }
@@ -493,20 +490,21 @@ async function loadOtPriority() {
 function renderOtPriority(rows, el) {
   const shiftFilter = document.getElementById("ot-shift-filter")?.value || "";
   const filtered = shiftFilter ? rows.filter(r => r.shift_type === shiftFilter) : rows;
-  if (!filtered.length) { el.innerHTML = '<p class="empty">此期間無加班順位資料</p>'; return; }
+  if (!filtered.length) { el.innerHTML = '<p class="empty">此期間無加班順序資料</p>'; return; }
   const byDate = {};
   filtered.forEach(r => {
-    if (!byDate[r.priority_date]) byDate[r.priority_date] = {};
+    if (!byDate[r.schedule_date]) byDate[r.schedule_date] = {};
     const k = r.shift_type || "—";
-    if (!byDate[r.priority_date][k]) byDate[r.priority_date][k] = [];
-    byDate[r.priority_date][k].push(r);
+    if (!byDate[r.schedule_date][k]) byDate[r.schedule_date][k] = [];
+    byDate[r.schedule_date][k].push(r);
   });
+  const otSeqNum = r => parseInt((r.ot_seq || '').replace(/\D/g, '') || '0');
   el.innerHTML = Object.keys(byDate).sort().map(d => {
     const shifts = Object.keys(byDate[d]).sort((a,b) => shiftSortKey(a) - shiftSortKey(b));
     return `<div class="card" style="margin-bottom:10px">
       <div style="font-size:.82rem;color:#888;margin-bottom:8px">${formatDate(d)}</div>
       ${shifts.map(shift => {
-        const group = byDate[d][shift].sort((a,b) => a.priority_order - b.priority_order);
+        const group = byDate[d][shift].sort((a,b) => otSeqNum(a) - otSeqNum(b));
         return `<div style="margin-bottom:8px">
           <div style="font-weight:600;color:#06c755;margin-bottom:4px">【${shift}】</div>
           ${group.map(r => {
@@ -514,10 +512,10 @@ function renderOtPriority(rows, el) {
             const isMe = r.user_id === me.id;
             return `<div class="ot-row">
               <div style="display:flex;align-items:center;gap:12px">
-                <span class="ot-rank">${formatOtCode(r.shift_type, r.priority_order)}</span>
+                <span class="ot-rank">${r.ot_seq}</span>
                 <span>${name}</span>
               </div>
-              ${!isMe ? `<button class="btn btn-sm btn-outline" onclick="openOtSwap('${r.id}','${r.user_id}','${name}',${r.priority_order},'${shift}','${d}')">換順位</button>` : ""}
+              ${!isMe ? `<button class="btn btn-sm btn-outline" onclick="openOtSwap('${r.id}','${r.user_id}','${name}','${r.ot_seq}','${shift}','${d}')">換順序</button>` : ""}
             </div>`;
           }).join("")}
         </div>`;
@@ -542,7 +540,7 @@ function renderMyRequests(reqs, el) {
     const isTarget = r.target_user_id === me.id;
     const rname = r.requester_id ? (usersMap[r.requester_id] || "?") : "系統";
     const tname = r.target_user_id ? (usersMap[r.target_user_id] || "?") : "—";
-    const rtype = r.request_type === "shift" ? "換班" : r.request_type === "ot_priority" ? "換加班順位" : "主管直接調班";
+    const rtype = r.request_type === "shift" ? "換班" : r.request_type === "ot_seq" ? "換加班順序" : "主管直接調班";
     const shortId = r.id.slice(0, 8);
     const canCancel = isRequester && ["submitted", "pending_peer"].includes(r.status);
     const canRespond = isTarget && r.status === "pending_peer";
@@ -655,7 +653,6 @@ async function uploadFile(file) {
     fd.append("file", file);
     fd.append("version", file.name.replace(/\.(xlsx|xlsm|xls)$/i, ""));
     fd.append("import_schedules", "0");
-    fd.append("import_ot_priority", "0");
     const res = await fetch(window.__API_BASE__ + "/api/schedules/import", {
       method: "POST",
       headers: { "X-Line-User-Id": window._lineUserId },
@@ -666,23 +663,21 @@ async function uploadFile(file) {
 
     // 顯示預覽區
     const hasSched = data.parsed_schedules > 0;
-    const hasOt    = data.parsed_ot_priority > 0;
     document.getElementById("preview-summary").textContent =
-      `解析完成：${data.parsed_start || "—"} ~ ${data.parsed_end || "—"}　班表 ${data.parsed_schedules} 筆 / 加班順位 ${data.parsed_ot_priority} 筆`;
+      `解析完成：${data.parsed_start || "—"} ~ ${data.parsed_end || "—"}　班表 ${data.parsed_schedules} 筆`;
     document.getElementById("import-start").value = data.parsed_start || "";
     document.getElementById("import-end").value   = data.parsed_end   || "";
     document.getElementById("chk-schedules").checked = hasSched;
-    document.getElementById("chk-ot").checked        = hasOt;
     document.getElementById("import-preview").style.display = "block";
 
     // 若解析失敗，顯示診斷
-    if (!hasSched && !hasOt) {
+    if (!hasSched) {
       let dbg = `<div class="import-result import-warn" style="margin-top:10px">
         ⚠️ 解析結果為空，請確認格式是否正確<br>
         <span style="font-size:.8rem;color:#888">
         工作表：${(d.sheets_found||[]).join("、") || "—"}
         格式：${d.format || "—"}
-        班表 ${d.parsed_schedule_count ?? 0} 筆 / 順位 ${d.parsed_ot_count ?? 0} 筆</span>`;
+        班表 ${d.parsed_schedule_count ?? 0} 筆</span>`;
       if (d.ai_error)       dbg += `<br><span style="color:#c00;font-size:.8rem">${d.ai_error}</span>`;
       if (d.ai_sheet_error) dbg += `<br><span style="color:#c00;font-size:.8rem">${d.ai_sheet_error}</span>`;
       dbg += `</div>`;
@@ -705,7 +700,6 @@ async function confirmImport() {
     fd.append("file", pendingFile);
     fd.append("version", pendingFile.name.replace(/\.(xlsx|xls)$/i, ""));
     fd.append("import_schedules",   document.getElementById("chk-schedules").checked ? "1" : "0");
-    fd.append("import_ot_priority", document.getElementById("chk-ot").checked        ? "1" : "0");
     fd.append("start_date", document.getElementById("import-start").value);
     fd.append("end_date",   document.getElementById("import-end").value);
     const res = await fetch(window.__API_BASE__ + "/api/schedules/import", {
@@ -715,9 +709,9 @@ async function confirmImport() {
     });
     const data = await res.json();
     const d = data.debug || {};
-    const okClass = (data.schedules_imported > 0 || data.ot_priority_imported > 0) ? "import-ok" : "import-warn";
+    const okClass = data.schedules_imported > 0 ? "import-ok" : "import-warn";
     let html = `<div class="import-result ${okClass}">
-      班表匯入：${data.schedules_imported} 筆，加班順位匯入：${data.ot_priority_imported} 筆
+      班表匯入：${data.schedules_imported} 筆
     </div>`;
     if (data.unmatched_names && data.unmatched_names.length) {
       html += `<div class="import-result import-warn">⚠️ 未比對到的姓名：${data.unmatched_names.join("、")}</div>`;
@@ -727,7 +721,7 @@ async function confirmImport() {
     }
     resultEl.innerHTML = html;
     document.getElementById("import-preview").style.display = "none";
-    showToast((data.schedules_imported > 0 || data.ot_priority_imported > 0) ? "匯入完成" : "匯入完成（0 筆）");
+    showToast(data.schedules_imported > 0 ? "匯入完成" : "匯入完成（0 筆）");
   } catch (e) {
     resultEl.innerHTML = `<div class="import-result import-warn">匯入失敗：${e.message}</div>`;
     showToast("匯入失敗", false);
@@ -751,9 +745,9 @@ async function loadDirectSwapData() {
       usersMap = { ...usersMap, ...(data.users || {}) };
       directData = data.schedules;
     } else {
-      const data = await apiFetch(`/api/ot-priority?date=${dateVal}`);
+      const data = await apiFetch(`/api/schedules?date=${dateVal}`);
       usersMap = { ...usersMap, ...(data.users || {}) };
-      directData = data.ot_priority;
+      directData = (data.schedules || []).filter(r => r.ot_seq);
     }
     renderDirectSwapList(directData, swapType, el);
   } catch { el.innerHTML = '<p class="empty">載入失敗</p>'; }
@@ -764,7 +758,7 @@ function renderDirectSwapList(rows, swapType, el) {
   if (!rows.length) { el.innerHTML = '<p class="empty">無資料</p>'; return; }
   el.innerHTML = '<div class="card">' + rows.map((r, i) => {
     const name = usersMap[r.user_id] || "?";
-    const label = swapType === "shift" ? `${name}：${r.shift_type}${r.area ? " " + r.area : ""}` : `${r.shift_type ? "【" + r.shift_type + "】" : ""}${r.priority_order}. ${name}`;
+    const label = swapType === "shift" ? `${name}：${r.shift_type}${r.area ? " " + r.area : ""}` : `${r.shift_type ? "【" + r.shift_type + "】" : ""}${r.ot_seq} ${name}`;
     return `<div class="shift-row" style="cursor:pointer" id="direct-row-${i}" onclick="selectDirectSlot(${i},'${r.id}','${label.replace(/'/g, "\\'")}')">
       <span>${label}</span>
       <span id="direct-check-${i}" style="color:#06c755;display:none">✓</span>
@@ -842,12 +836,17 @@ function openShiftSwap(theirScheduleId, theirUserId, theirName, theirShift, date
   document.getElementById("swap-modal").classList.add("open");
 }
 
-async function openOtSwap(theirOtId, theirUserId, theirName, theirOrder, theirShift, theirDate) {
+async function openOtSwap(theirScheduleId, theirUserId, theirName, theirOtSeq, theirShift, theirDate) {
   loading(true);
   try {
     const month = theirDate.slice(0, 7);
-    const data = await apiFetch(`/api/ot-priority/me?month=${month}`);
-    myOtData = data.ot_priority || [];
+    const startOfMonth = month + '-01';
+    const tmp = new Date(startOfMonth);
+    tmp.setMonth(tmp.getMonth() + 1);
+    tmp.setDate(tmp.getDate() - 1);
+    const endOfMonth = tmp.toISOString().slice(0, 10);
+    const data = await apiFetch(`/api/schedules/me?mode=range&start=${startOfMonth}&end=${endOfMonth}`);
+    myOtData = (data.schedules || []).filter(r => r.ot_seq);
   } catch {
     showToast("載入失敗", false);
     loading(false);
@@ -855,11 +854,11 @@ async function openOtSwap(theirOtId, theirUserId, theirName, theirOrder, theirSh
   }
   loading(false);
 
-  document.getElementById("ot-swap-their-id").value = theirOtId;
+  document.getElementById("ot-swap-their-id").value = theirScheduleId;
   document.getElementById("ot-swap-target-user-id").value = theirUserId;
   document.getElementById("ot-swap-their-date").value = theirDate;
   document.getElementById("ot-swap-their-shift").value = theirShift;
-  document.getElementById("ot-swap-their-label").textContent = `${theirName}：${formatDate(theirDate)}【${theirShift}】第 ${theirOrder} 順位`;
+  document.getElementById("ot-swap-their-label").textContent = `${theirName}：${formatDate(theirDate)}【${theirShift}】${theirOtSeq}`;
   document.getElementById("ot-swap-my-id").value = "";
   document.getElementById("ot-swap-warning").style.display = "none";
   document.getElementById("ot-swap-submit").disabled = true;
@@ -867,19 +866,19 @@ async function openOtSwap(theirOtId, theirUserId, theirName, theirOrder, theirSh
 
   const listEl = document.getElementById("ot-swap-my-list");
   if (!myOtData.length) {
-    listEl.innerHTML = '<p class="empty" style="padding:12px">當月無加班順位記錄</p>';
+    listEl.innerHTML = '<p class="empty" style="padding:12px">當月無加班順序記錄</p>';
   } else {
     listEl.innerHTML = myOtData.map(r =>
-      `<div class="ot-select-row" id="ot-sel-${r.id}" onclick="selectMyOtSlot('${r.id}','${r.priority_date}','${r.shift_type}',${r.priority_order})">
-        <span style="color:#888;font-size:.82rem;min-width:70px">${formatDate(r.priority_date)}</span>
+      `<div class="ot-select-row" id="ot-sel-${r.id}" onclick="selectMyOtSlot('${r.id}','${r.schedule_date}','${r.shift_type}','${r.ot_seq}')">
+        <span style="color:#888;font-size:.82rem;min-width:70px">${formatDate(r.schedule_date)}</span>
         <span class="shift-tag">${r.shift_type}</span>
-        <span>第 ${r.priority_order} 順位</span>
+        <span>${r.ot_seq}</span>
       </div>`).join("");
   }
   document.getElementById("ot-swap-modal").classList.add("open");
 }
 
-function selectMyOtSlot(myOtId, myDate, myShift, myOrder) {
+function selectMyOtSlot(myOtId, myDate, myShift, myOtSeq) {
   document.querySelectorAll(".ot-select-row").forEach(el => el.classList.remove("selected"));
   document.getElementById("ot-sel-" + myOtId).classList.add("selected");
   document.getElementById("ot-swap-my-id").value = myOtId;
@@ -889,7 +888,7 @@ function selectMyOtSlot(myOtId, myDate, myShift, myOrder) {
   const warnEl = document.getElementById("ot-swap-warning");
 
   if (myShift !== theirShift) {
-    warnEl.innerHTML = `❌ 班別不同（您的【${myShift}】vs 對方【${theirShift}】），不可交換加班順位。`;
+    warnEl.innerHTML = `❌ 班別不同（您的【${myShift}】vs 對方【${theirShift}】），不可交換加班順序。`;
     warnEl.style.background = "#ffebee";
     warnEl.style.borderColor = "#ef9a9a";
     warnEl.style.display = "";
@@ -897,10 +896,10 @@ function selectMyOtSlot(myOtId, myDate, myShift, myOrder) {
     return;
   }
 
-  const conflict = myOtData.find(r => r.priority_date === theirDate && r.shift_type === theirShift);
+  const conflict = myOtData.find(r => r.schedule_date === theirDate && r.shift_type === theirShift);
   if (conflict) {
-    warnEl.innerHTML = `⚠️ 您在 ${formatDate(theirDate)}【${theirShift}】已有第 ${conflict.priority_order} 順位。` +
-      `交換完成後，系統將自動對調此順位與對方在 ${formatDate(myDate)}【${myShift}】的對應順位。`;
+    warnEl.innerHTML = `⚠️ 您在 ${formatDate(theirDate)}【${theirShift}】已有 ${conflict.ot_seq} 順序。` +
+      `交換完成後，系統將自動對調此順序與對方在 ${formatDate(myDate)}【${myShift}】的對應順序。`;
     warnEl.style.background = "#fff8e1";
     warnEl.style.borderColor = "#ffc107";
     warnEl.style.display = "";
@@ -926,9 +925,9 @@ async function submitOtSwap() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        request_type: "ot_priority",
-        ot_priority_id: myOtId,
-        target_ot_priority_id: theirOtId,
+        request_type: "ot_seq",
+        schedule_id: myOtId,
+        target_schedule_id: theirOtId,
         target_user_id: targetUserId,
         reason: reason || null,
       }),
@@ -955,7 +954,7 @@ async function submitSwapRequest() {
   const reason = document.getElementById("swap-reason").value;
   const body = { request_type: stype, target_user_id: targetUserId, reason: reason || null };
   if (stype === "shift") { body.schedule_id = mySlotId; body.target_schedule_id = theirSlotId; }
-  else { body.ot_priority_id = mySlotId; body.target_ot_priority_id = theirSlotId; }
+  else { body.schedule_id = mySlotId; body.target_schedule_id = theirSlotId; }
   loading(true);
   try {
     await apiFetch("/api/swap-requests", {
