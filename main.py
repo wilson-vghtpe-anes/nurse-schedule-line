@@ -182,6 +182,15 @@ def delete_schedules_by_version(version: str) -> bool:
     ).status_code < 400
 
 
+def delete_schedules_by_date_range(start: str, end: str) -> bool:
+    return requests.delete(
+        f"{SUPABASE_URL}/rest/v1/schedules",
+        headers=SUPABASE_HEADERS,
+        params=[("schedule_date", f"gte.{start}"), ("schedule_date", f"lte.{end}")],
+        timeout=30,
+    ).status_code < 400
+
+
 def update_schedule_status(schedule_id: str, status: str):
     requests.patch(
         f"{SUPABASE_URL}/rest/v1/schedules",
@@ -1285,7 +1294,9 @@ async def api_import_schedules(
     sched_inserted = 0
 
     if schedule_records and import_schedules:
-        delete_schedules_by_version(version)
+        date_min = min(r["schedule_date"] for r in schedule_records)
+        date_max = max(r["schedule_date"] for r in schedule_records)
+        delete_schedules_by_date_range(date_min, date_max)
         sched_ok = upsert_schedules(schedule_records)
         sched_inserted = len(schedule_records) if sched_ok else 0
 
