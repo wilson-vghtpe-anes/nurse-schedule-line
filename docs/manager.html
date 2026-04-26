@@ -422,7 +422,11 @@ function renderMySchedule(rows, el) {
       <div style="font-size:.82rem;color:#888;margin-bottom:6px;">${formatDate(d)}</div>
       ${byDate[d].map(r => `
         <div class="shift-row">
-          <span class="shift-tag">${r.shift_type}</span>
+          <div>
+            <span class="shift-tag">${r.shift_type}</span>
+            ${r.monthly_code ? `<span style="margin-left:8px;font-size:.75rem;color:#1565c0;font-weight:600">${r.monthly_code}</span>` : ""}
+            ${r.work_area ? `<span style="margin-left:6px;font-size:.78rem;color:#888;background:#f5f5f5;padding:2px 6px;border-radius:8px">${r.work_area}</span>` : ""}
+          </div>
         </div>`).join("")}
     </div>`).join("");
 }
@@ -458,22 +462,16 @@ async function loadAllSchedule() {
     sel.innerHTML = `<option value="">全部班別</option>` + shifts.map(s => `<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join("");
     const areas = [...new Set(data.schedules.map(r => r.work_area).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'zh-TW'));
     const rawCodes = [...new Set(data.schedules.map(r => r.monthly_code).filter(Boolean))];
-    const codeGroupSet = new Set();
-    rawCodes.forEach(c => {
-      if (c.startsWith('A'))      codeGroupSet.add(c.slice(0, 3));
-      else if (c.startsWith('B')) codeGroupSet.add('B');
-      else if (c.startsWith('C')) codeGroupSet.add('C');
-      else if (c.startsWith('E')) codeGroupSet.add('E');
-    });
-    const aGroups = [...codeGroupSet].filter(g => g.startsWith('A')).sort();
-    const otherGroups = [...codeGroupSet].filter(g => !g.startsWith('A')).sort();
-    const allCodeGroups = [...aGroups, ...otherGroups, 'NS', 'CS'];
+    const aSubGroups = [...new Set(rawCodes.filter(c => c.startsWith('A')).map(c => c.slice(0, 3)))].sort();
+    const allCodeGroups = ['中正', ...aSubGroups, '思源', '八樓', '翼樓', 'NS', 'CS'];
     const prevCodeChecked = new Set([...document.querySelectorAll(".code-cb:checked")].map(cb => cb.value));
-    document.getElementById("code-checkbox-list").innerHTML = allCodeGroups.map(g =>
-      `<label style="display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;font-size:.85rem">
+    document.getElementById("code-checkbox-list").innerHTML = allCodeGroups.map(g => {
+      const isASub = g.length === 3 && g.startsWith('A');
+      return `<label style="display:flex;align-items:center;gap:6px;padding:${isASub ? '3px 12px 3px 26px' : '6px 12px'};cursor:pointer;font-size:${isASub ? '.8rem' : '.85rem'};color:${isASub ? '#555' : 'inherit'}">
         <input type="checkbox" class="code-cb" value="${g}"${prevCodeChecked.has(g) ? ' checked' : ''} onchange="onCodeCbChange()">
         ${_codeGroupLabel(g)}
-      </label>`).join("");
+      </label>`;
+    }).join("");
     _syncCodeDropdown();
 
     const prevChecked = new Set([...document.querySelectorAll(".area-cb:checked")].map(cb => cb.value));
@@ -506,12 +504,8 @@ const _NS_PREFIXES = ['A04','A09','A11','A12','A13','E49','E50'];
 const _CS_PREFIXES = ['A19','A21','A22'];
 
 function _codeGroupLabel(g) {
+  if (g === '中正') return '中正（全部）';
   if (g === 'A00') return 'A00（主管）';
-  if (g === 'B')   return 'B（思源）';
-  if (g === 'C')   return 'C（八樓）';
-  if (g === 'E')   return 'E（翼樓）';
-  if (g === 'NS')  return 'NS';
-  if (g === 'CS')  return 'CS';
   return g;
 }
 
@@ -519,7 +513,11 @@ function _matchesCodeGroup(code, group) {
   if (!code) return false;
   if (group === 'NS') return _NS_PREFIXES.some(p => code.startsWith(p));
   if (group === 'CS') return _CS_PREFIXES.some(p => code.startsWith(p));
-  return code.startsWith(group);
+  if (group === '中正') return code.startsWith('A');
+  if (group === '思源') return code.startsWith('B');
+  if (group === '八樓') return code.startsWith('C');
+  if (group === '翼樓') return code.startsWith('E');
+  return code.startsWith(group); // A00, A01, A02, ...
 }
 
 function toggleCodeDropdown() {
@@ -547,7 +545,7 @@ function _syncCodeDropdown() {
   if (checked.length === 0 || checked.length === all.length) {
     allCb.checked = checked.length === all.length;
     allCb.indeterminate = false;
-    btn.textContent = "全部代號 ▾";
+    btn.textContent = "全部預設房區 ▾";
   } else {
     allCb.checked = false;
     allCb.indeterminate = true;
