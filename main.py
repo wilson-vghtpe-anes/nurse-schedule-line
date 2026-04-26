@@ -432,8 +432,6 @@ def _parse_vnhc_wide(ws, version: str, strip_ot_code: bool = False) -> list:
             shift = _normalize_shift_code(raw) if strip_ot_code else _SHIFT_NORMALIZE.get(raw, raw)
             if not shift or shift.lower() in _OFF_SHIFTS_KNOWN or shift in OFF_SHIFTS:
                 continue
-            if shift not in SHIFT_TYPES:
-                shift = '其他'
             schedules.append({
                 'date_str': date_str,
                 'name': name,
