@@ -192,68 +192,6 @@ def update_schedule_status(schedule_id: str, status: str):
     )
 
 
-# ── Supabase: OT priority helpers ──────────────────────────────────────────────
-
-def get_ot_priority_by_date(priority_date: str, shift_type: str = None):
-    params = {
-        "priority_date": f"eq.{priority_date}",
-        "status": "eq.active",
-        "order": "shift_type,priority_order",
-        "select": "id,priority_date,user_id,shift_type,priority_order,source_version",
-        "limit": "10000",
-    }
-    if shift_type:
-        params["shift_type"] = f"eq.{shift_type}"
-    return _sb("ot_priority", params=params) or []
-
-
-def get_ot_priority_by_id(ot_priority_id: str):
-    rows = _sb("ot_priority", params={"id": f"eq.{ot_priority_id}", "limit": "1"})
-    return rows[0] if rows else None
-
-
-def get_ot_priority_range(start: str, end: str, user_id: str = None):
-    params = [
-        ("priority_date", f"gte.{start}"),
-        ("priority_date", f"lte.{end}"),
-        ("status", "eq.active"),
-        ("order", "priority_date,shift_type,priority_order"),
-        ("select", "id,priority_date,user_id,shift_type,priority_order,source_version"),
-        ("limit", "10000"),
-    ]
-    if user_id:
-        params.append(("user_id", f"eq.{user_id}"))
-    return _sb("ot_priority", params=params) or []
-
-
-def upsert_ot_priority(records: list):
-    return requests.post(
-        f"{SUPABASE_URL}/rest/v1/ot_priority",
-        headers={**SUPABASE_HEADERS, "Prefer": "return=minimal"},
-        json=records,
-        timeout=30,
-    ).status_code < 400
-
-
-def delete_ot_priority_by_version(version: str) -> bool:
-    if not version:
-        return True
-    return requests.delete(
-        f"{SUPABASE_URL}/rest/v1/ot_priority",
-        headers=SUPABASE_HEADERS,
-        params={"source_version": f"eq.{version}"},
-        timeout=30,
-    ).status_code < 400
-
-
-def update_ot_priority_status(ot_priority_id: str, status: str):
-    requests.patch(
-        f"{SUPABASE_URL}/rest/v1/ot_priority",
-        headers=SUPABASE_HEADERS,
-        params={"id": f"eq.{ot_priority_id}"},
-        json={"status": status},
-        timeout=10,
-    )
 
 
 # ── Supabase: swap request helpers ────────────────────────────────────────────
@@ -303,8 +241,8 @@ def update_swap_request(request_id: str, fields: dict):
     )
 
 
-def _get_conflicting_swap_requests(schedule_ids: list, ot_priority_ids: list):
-    """Find pending requests that conflict with the given slot IDs."""
+def _get_conflicting_swap_requests(schedule_ids: list):
+    """Find pending requests that conflict with the given schedule slot IDs."""
     results = []
     active_statuses = ["submitted", "pending_peer"]
 
@@ -312,14 +250,6 @@ def _get_conflicting_swap_requests(schedule_ids: list, ot_priority_ids: list):
         for field in ["schedule_id", "target_schedule_id"]:
             rows = _sb("swap_requests", params={
                 field: f"eq.{sid}",
-                "status": f"in.({','.join(active_statuses)})",
-            }) or []
-            results.extend(rows)
-
-    for oid in ot_priority_ids:
-        for field in ["ot_priority_id", "target_ot_priority_id"]:
-            rows = _sb("swap_requests", params={
-                field: f"eq.{oid}",
                 "status": f"in.({','.join(active_statuses)})",
             }) or []
             results.extend(rows)
@@ -333,9 +263,9 @@ def _get_conflicting_swap_requests(schedule_ids: list, ot_priority_ids: list):
     return unique
 
 
-def auto_reject_conflicts(exclude_request_id: str, schedule_ids: list, ot_priority_ids: list):
+def auto_reject_conflicts(exclude_request_id: str, schedule_ids: list):
     """Auto-reject conflicting pending requests and notify affected users."""
-    conflicts = _get_conflicting_swap_requests(schedule_ids, ot_priority_ids)
+    conflicts = _get_conflicting_swap_requests(schedule_ids)
     for req in conflicts:
         if req["id"] == exclude_request_id:
             continue
@@ -378,14 +308,130 @@ _SHIFT_NORMALIZE = {
 _OFF_SHIFTS_KNOWN = {'公休', '休假', '例假', '國定假日', '休', '例休', '補休', 'off', '國定', '休息日', '排休'}
 _SHIFT_START_MAP = {7: '7-3', 9: '9-5', 10: '10-6', 12: '12-8', 3: '3-11', 11: '11-7'}
 
+# WEEK xlsm 格式：工作區域代碼正規化
+_WEEK_AREA_NORMALIZE = {
+    '3F': '中正', 'S': '思源', 'E': '翼樓',
+    '8F': '八樓', '8FF': '八樓',  # 8FF 為原始資料手誤
+}
+# 護理師代號首字母 → 預設工作區域（無明示室別時 fallback）
+_WEEK_CODE_PREFIX_AREA = {'A': '中正', 'B': '思源', 'C': '八樓', 'E': '翼樓'}
+
 
 def _normalize_shift_code(raw: str) -> str:
     base = re.split(r'[np]', raw.strip().strip('.'))[0].strip()
     return _SHIFT_NORMALIZE.get(base, base)
 
 
+def _parse_week_cell(raw, nurse_code: str):
+    """
+    解析 WEEK xlsm 單一排班儲存格。
+    支援格式：
+      "AR8\\n7~3n28"   → area="AR8",       shift="7-3", ot_seq="n28"
+      "7~3n35"         → area=None,        shift="7-3", ot_seq="n35"
+      "CS cover\\n7~3" → area="CS cover",  shift="7-3", ot_seq=None
+      "10~6p6"         → area=None,        shift="10-6", ot_seq="p6"
+      "7~3S4"          → area=None,        shift="7-3", ot_seq="S4"
+    回傳: (area, shift_type, ot_seq)
+    """
+    if raw is None:
+        return None, None, None
+    text = str(raw).replace('.', '').strip()
+    if not text or text == '0':
+        return None, None, None
+
+    if '\n' in text:
+        parts = text.split('\n', 1)
+        area_raw = parts[0].strip() or None
+        shift_raw = parts[1].strip()
+    else:
+        area_raw = None
+        shift_raw = text
+
+    m = re.search(r'(\d+~\d+)(.*)', shift_raw)
+    if not m:
+        return _WEEK_AREA_NORMALIZE.get(area_raw, area_raw) if area_raw else None, None, None
+
+    base_tilde = m.group(1)
+    suffix = m.group(2).strip() or None
+    shift_type = _SHIFT_NORMALIZE.get(base_tilde, base_tilde.replace('~', '-'))
+
+    # 正規化 area
+    area = _WEEK_AREA_NORMALIZE.get(area_raw, area_raw) if area_raw else None
+    # fallback：無明示室別時依護理師代號首字母推斷
+    if area is None:
+        area = _WEEK_CODE_PREFIX_AREA.get(nurse_code[0] if nurse_code else '', None)
+
+    return area, shift_type, suffix
+
+
+def _parse_week_xlsm(wb, version: str) -> dict:
+    """解析 WEEK xlsm 格式班表（WEEK日班資料 (2) 優先）。"""
+    week_sheets = [s for s in wb.sheetnames if s.startswith('WEEK')]
+    target = (
+        next((s for s in week_sheets if '(2)' in s), None)
+        or next((s for s in week_sheets if s != 'WEEK'), None)
+        or 'WEEK'
+    )
+    ws = wb[target]
+
+    # Row 4 僅取 C~I (col index 2~8，0-indexed) 的 datetime 欄
+    date_cols = {}
+    for row in ws.iter_rows(min_row=4, max_row=4, values_only=True):
+        for ci in range(2, 9):
+            v = row[ci] if ci < len(row) else None
+            if isinstance(v, (date, datetime)):
+                if (v.year if isinstance(v, datetime) else v.year) >= 2000:
+                    date_cols[ci] = v.strftime('%Y-%m-%d') if isinstance(v, datetime) else v.isoformat()
+
+    schedules = []
+    consecutive_empty = 0
+
+    for row in ws.iter_rows(min_row=6, values_only=True):
+        nurse_code = str(row[0]).strip() if row[0] else None
+        if not nurse_code:
+            consecutive_empty += 1
+            if consecutive_empty >= 5:
+                break
+            continue
+        consecutive_empty = 0
+
+        name = str(row[1]).strip() if len(row) > 1 and row[1] else ''
+        if not name:
+            continue
+
+        for ci, date_str in date_cols.items():
+            raw = row[ci] if ci < len(row) else None
+            area, shift_type, ot_seq = _parse_week_cell(raw, nurse_code)
+            if not shift_type:
+                continue
+            schedules.append({
+                'date_str': date_str,
+                'name': name,
+                'monthly_code': nurse_code,
+                'shift_type': shift_type,
+                'area': area or '',
+                'ot_seq': ot_seq,
+                'source_version': version,
+            })
+
+    return {
+        'schedules': schedules,
+        'ot_priority': [],
+        'overtime_records': [],
+        '_debug': {
+            'format': 'week_xlsm',
+            'sheet_used': target,
+            'parsed_schedule_count': len(schedules),
+            'parsed_ot_count': 0,
+        },
+    }
+
+
 def detect_known_format(wb) -> str:
-    """偵測是否為三種已知醫院班表格式。回傳 'ot_before' | 'ot_after' | 'pure'。"""
+    """偵測是否為三種已知醫院班表格式。回傳 'week_xlsm' | 'ot_before' | 'ot_after' | 'pure'。"""
+    # WEEK xlsm 格式：有 startswith("WEEK") 的 sheet（中文 sheet 名在某些環境 latin-1 顯示，用 ASCII 判斷）
+    if any(s.startswith('WEEK') for s in wb.sheetnames):
+        return 'week_xlsm'
     if '7_3P' in wb.sheetnames or '10_6班' in wb.sheetnames or '值班列印全' in wb.sheetnames:
         return 'ot_before'
     if '本月' in wb.sheetnames:
@@ -866,6 +912,8 @@ def parse_schedule_excel(file_bytes: bytes, version: str = "") -> dict:
 
     # 優先嘗試已知固定格式（不呼叫 AI）
     known = detect_known_format(wb)
+    if known == 'week_xlsm':
+        return _parse_week_xlsm(wb, version)
     if known == 'ot_before':
         schedules = _parse_vnhc_wide(wb['本月'], version, strip_ot_code=True) if '本月' in wb.sheetnames else []
 
@@ -1078,12 +1126,10 @@ def require_manager(user=Depends(get_current_user)):
 # ── Pydantic models ────────────────────────────────────────────────────────────
 
 class SwapRequestCreate(BaseModel):
-    request_type: str  # shift | ot_priority
+    request_type: str  # shift | ot_seq
     schedule_id: Optional[str] = None
-    ot_priority_id: Optional[str] = None
     target_user_id: str
     target_schedule_id: Optional[str] = None
-    target_ot_priority_id: Optional[str] = None
     reason: Optional[str] = None
 
 
@@ -1189,47 +1235,11 @@ async def api_schedules(
     return {"schedules": rows, "users": {uid: u["name"] for uid, u in users_map.items()}}
 
 
-@app.get("/api/ot-priority/me")
-async def api_ot_priority_me(
-    month: Optional[str] = None,
-    user=Depends(get_current_user),
-):
-    if month:
-        start, end = month_range(month)
-    else:
-        start, end = month_range(datetime.today().strftime("%Y-%m"))
-    rows = get_ot_priority_range(start, end, user_id=user["id"])
-    return {"ot_priority": rows}
-
-
-@app.get("/api/ot-priority")
-async def api_ot_priority(
-    date: Optional[str] = None,
-    start: Optional[str] = None,
-    end: Optional[str] = None,
-    shift_type: Optional[str] = None,
-    name: Optional[str] = None,
-    user=Depends(get_current_user),
-):
-    users_map = _build_users_map()
-    if start and end:
-        rows = get_ot_priority_range(start, end)
-    else:
-        target_date = date or datetime.today().strftime("%Y-%m-%d")
-        rows = get_ot_priority_by_date(target_date, shift_type)
-    if name:
-        kw = name.strip().lower()
-        uid_set = {uid for uid, u in users_map.items() if kw in u["name"].lower()}
-        rows = [r for r in rows if r["user_id"] in uid_set]
-    return {"ot_priority": rows, "users": {uid: u["name"] for uid, u in users_map.items()}}
-
-
 @app.post("/api/schedules/import")
 async def api_import_schedules(
     file: UploadFile = File(...),
     version: str = Form(""),
     import_schedules: bool = Form(True),
-    import_ot_priority: bool = Form(True),
     start_date: str = Form(""),
     end_date: str = Form(""),
     manager=Depends(require_manager),
@@ -1243,7 +1253,6 @@ async def api_import_schedules(
     users_map = {u["name"]: u["id"] for u in get_all_users()}
 
     schedule_records = []
-    ot_records = []
     unmatched_names = set()
     invalid_shifts = set()
     all_dates = []
@@ -1265,56 +1274,30 @@ async def api_import_schedules(
             "user_id": uid,
             "schedule_date": item["date_str"],
             "shift_type": item["shift_type"],
-            "area": item["area"] or None,
-            "source_version": item["source_version"],
-            "status": "active",
-        })
-
-    for item in parsed["ot_priority"]:
-        all_dates.append(item["date_str"])
-        if start_date and item["date_str"] < start_date:
-            continue
-        if end_date and item["date_str"] > end_date:
-            continue
-        uid = users_map.get(item["name"])
-        if not uid:
-            unmatched_names.add(item["name"])
-            continue
-        ot_records.append({
-            "priority_date": item["date_str"],
-            "user_id": uid,
-            "shift_type": item.get("shift_type"),
-            "priority_order": item["priority_order"],
+            "area": item.get("area") or None,
+            "monthly_code": item.get("monthly_code") or None,
+            "ot_seq": item.get("ot_seq") or None,
             "source_version": item["source_version"],
             "status": "active",
         })
 
     sched_ok = True
-    ot_ok = True
     sched_inserted = 0
-    ot_inserted = 0
 
     if schedule_records and import_schedules:
         delete_schedules_by_version(version)
         sched_ok = upsert_schedules(schedule_records)
         sched_inserted = len(schedule_records) if sched_ok else 0
 
-    if ot_records and import_ot_priority:
-        delete_ot_priority_by_version(version)
-        ot_ok = upsert_ot_priority(ot_records)
-        ot_inserted = len(ot_records) if ot_ok else 0
-
     return {
         "schedules_imported": sched_inserted,
-        "ot_priority_imported": ot_inserted,
         "parsed_schedules": len(schedule_records),
-        "parsed_ot_priority": len(ot_records),
         "parsed_start": min(all_dates) if all_dates else "",
         "parsed_end": max(all_dates) if all_dates else "",
-        "dry_run": not import_schedules and not import_ot_priority,
+        "dry_run": not import_schedules,
         "unmatched_names": list(unmatched_names),
         "invalid_shifts": list(invalid_shifts),
-        "success": sched_ok and ot_ok,
+        "success": sched_ok,
         "debug": debug_info,
     }
 
@@ -1324,43 +1307,35 @@ async def api_create_swap_request(
     body: SwapRequestCreate,
     user=Depends(get_current_user),
 ):
-    if body.request_type not in ("shift", "ot_priority"):
-        raise HTTPException(status_code=400, detail="request_type must be shift or ot_priority")
+    if body.request_type not in ("shift", "ot_seq"):
+        raise HTTPException(status_code=400, detail="request_type must be shift or ot_seq")
 
-    if body.request_type == "shift":
-        if not body.schedule_id or not body.target_schedule_id:
-            raise HTTPException(status_code=400, detail="schedule_id and target_schedule_id required")
-        my_slot = get_schedule_by_id(body.schedule_id)
-        their_slot = get_schedule_by_id(body.target_schedule_id)
-        if not my_slot or my_slot["user_id"] != user["id"]:
-            raise HTTPException(status_code=400, detail="schedule_id does not belong to you")
-        if not their_slot or their_slot["user_id"] != body.target_user_id:
-            raise HTTPException(status_code=400, detail="target_schedule_id does not belong to target_user_id")
-    else:
-        if not body.ot_priority_id or not body.target_ot_priority_id:
-            raise HTTPException(status_code=400, detail="ot_priority_id and target_ot_priority_id required")
-        my_slot = get_ot_priority_by_id(body.ot_priority_id)
-        their_slot = get_ot_priority_by_id(body.target_ot_priority_id)
-        if not my_slot or my_slot["user_id"] != user["id"]:
-            raise HTTPException(status_code=400, detail="ot_priority_id does not belong to you")
-        if not their_slot or their_slot["user_id"] != body.target_user_id:
-            raise HTTPException(status_code=400, detail="target_ot_priority_id does not belong to target_user_id")
+    if not body.schedule_id or not body.target_schedule_id:
+        raise HTTPException(status_code=400, detail="schedule_id and target_schedule_id required")
+
+    my_slot = get_schedule_by_id(body.schedule_id)
+    their_slot = get_schedule_by_id(body.target_schedule_id)
+    if not my_slot or my_slot["user_id"] != user["id"]:
+        raise HTTPException(status_code=400, detail="schedule_id does not belong to you")
+    if not their_slot or their_slot["user_id"] != body.target_user_id:
+        raise HTTPException(status_code=400, detail="target_schedule_id does not belong to target_user_id")
+
+    if body.request_type == "ot_seq":
         if my_slot.get("shift_type") != their_slot.get("shift_type"):
-            raise HTTPException(status_code=400, detail=f"班別不同（{my_slot.get('shift_type')} vs {their_slot.get('shift_type')}），不可交換加班順位")
+            raise HTTPException(
+                status_code=400,
+                detail=f"班別不同（{my_slot.get('shift_type')} vs {their_slot.get('shift_type')}），不可交換加班順序",
+            )
 
     data = {
         "request_type": body.request_type,
         "status": "pending_peer",
         "requester_id": user["id"],
         "target_user_id": body.target_user_id,
+        "schedule_id": body.schedule_id,
+        "target_schedule_id": body.target_schedule_id,
         "reason": body.reason,
     }
-    if body.request_type == "shift":
-        data["schedule_id"] = body.schedule_id
-        data["target_schedule_id"] = body.target_schedule_id
-    else:
-        data["ot_priority_id"] = body.ot_priority_id
-        data["target_ot_priority_id"] = body.target_ot_priority_id
 
     req = create_swap_request(data)
     if not req:
@@ -1368,7 +1343,7 @@ async def api_create_swap_request(
 
     target = get_user_by_id(body.target_user_id)
     if target and target.get("line_user_id"):
-        rtype = "換班" if body.request_type == "shift" else "換加班順位"
+        rtype = "換班" if body.request_type == "shift" else "換加班順序"
         push_message(
             target["line_user_id"],
             f"【{rtype}請求】{user['name']} 希望與您換班，請至 LINE app 查看並確認。\n申請 ID：{str(req['id'])[:8]}",
@@ -1428,81 +1403,42 @@ async def api_respond_swap_request(
     if body.response != "accepted":
         raise HTTPException(status_code=400, detail="response must be accepted or rejected")
 
-    if req["request_type"] == "ot_priority":
-        # OT priority swap: execute immediately
-        ot_a = get_ot_priority_by_id(req["ot_priority_id"])   # requester's slot
-        ot_b = get_ot_priority_by_id(req["target_ot_priority_id"])  # target's slot
-        if not ot_a or not ot_b:
-            raise HTTPException(status_code=400, detail="OT priority slots not found")
+    if req["request_type"] == "ot_seq":
+        # ot_seq swap: execute immediately after peer accepts（無需主管審核）
+        sched_a = get_schedule_by_id(req["schedule_id"])
+        sched_b = get_schedule_by_id(req["target_schedule_id"])
+        if not sched_a or not sched_b:
+            raise HTTPException(status_code=400, detail="Schedule slots not found")
+        if sched_a["shift_type"] != sched_b["shift_type"]:
+            raise HTTPException(status_code=400, detail="Cannot swap ot_seq between different shift types")
 
-        # Detect conflicts BEFORE swapping (cross-date: A may already have slot on B's date)
-        conflicts_a = _sb("ot_priority", params={
-            "user_id": f"eq.{req['requester_id']}",
-            "priority_date": f"eq.{ot_b['priority_date']}",
-            "shift_type": f"eq.{ot_b['shift_type']}",
-            "status": "eq.active",
-        }) or []
-        conflict_a = next((r for r in conflicts_a if r["id"] != ot_b["id"]), None)
-
-        conflicts_b = _sb("ot_priority", params={
-            "user_id": f"eq.{req['target_user_id']}",
-            "priority_date": f"eq.{ot_a['priority_date']}",
-            "shift_type": f"eq.{ot_a['shift_type']}",
-            "status": "eq.active",
-        }) or []
-        conflict_b = next((r for r in conflicts_b if r["id"] != ot_a["id"]), None)
-
-        # Main swap
+        # Swap ot_seq values between the two schedule rows
         requests.patch(
-            f"{SUPABASE_URL}/rest/v1/ot_priority",
+            f"{SUPABASE_URL}/rest/v1/schedules",
             headers=SUPABASE_HEADERS,
-            params={"id": f"eq.{ot_a['id']}"},
-            json={"user_id": ot_b["user_id"]},
+            params={"id": f"eq.{sched_a['id']}"},
+            json={"ot_seq": sched_b.get("ot_seq")},
             timeout=10,
         )
         requests.patch(
-            f"{SUPABASE_URL}/rest/v1/ot_priority",
+            f"{SUPABASE_URL}/rest/v1/schedules",
             headers=SUPABASE_HEADERS,
-            params={"id": f"eq.{ot_b['id']}"},
-            json={"user_id": ot_a["user_id"]},
+            params={"id": f"eq.{sched_b['id']}"},
+            json={"ot_seq": sched_a.get("ot_seq")},
             timeout=10,
         )
-
-        # Secondary swap to resolve duplicate slots caused by cross-date swap
-        secondary_msg = ""
-        if conflict_a and conflict_b:
-            requests.patch(
-                f"{SUPABASE_URL}/rest/v1/ot_priority",
-                headers=SUPABASE_HEADERS,
-                params={"id": f"eq.{conflict_a['id']}"},
-                json={"user_id": req["target_user_id"]},
-                timeout=10,
-            )
-            requests.patch(
-                f"{SUPABASE_URL}/rest/v1/ot_priority",
-                headers=SUPABASE_HEADERS,
-                params={"id": f"eq.{conflict_b['id']}"},
-                json={"user_id": req["requester_id"]},
-                timeout=10,
-            )
-            secondary_msg = f"（同時已自動對調 {ot_b['priority_date']} 第{conflict_a['priority_order']}順位 與 {ot_a['priority_date']} 第{conflict_b['priority_order']}順位）"
 
         update_swap_request(request_id, {
             "status": "approved",
             "peer_response": "accepted",
             "peer_responded_at": datetime.utcnow().isoformat(),
         })
-        auto_reject_conflicts(
-            request_id,
-            schedule_ids=[],
-            ot_priority_ids=[ot_a["id"], ot_b["id"]],
-        )
+        auto_reject_conflicts(request_id, schedule_ids=[sched_a["id"], sched_b["id"]])
 
-        # Notify requester
         requester = get_user_by_id(req["requester_id"])
         if requester and requester.get("line_user_id"):
-            push_message(requester["line_user_id"], f"您的換加班順位申請 [{str(request_id)[:8]}] 已完成，對方已同意並執行。{secondary_msg}")
-        push_message(user["line_user_id"], f"換加班順位申請 [{str(request_id)[:8]}] 已完成。{secondary_msg}")
+            push_message(requester["line_user_id"], f"您的換加班順序申請 [{str(request_id)[:8]}] 已完成，對方已同意並執行。")
+        push_message(user["line_user_id"], f"換加班順序申請 [{str(request_id)[:8]}] 已完成。")
         return {"status": "approved"}
 
     else:
@@ -1587,11 +1523,7 @@ async def api_review_swap_request(
         "admin_comment": body.comment,
         "admin_decided_at": datetime.utcnow().isoformat(),
     })
-    auto_reject_conflicts(
-        request_id,
-        schedule_ids=[sched_a["id"], sched_b["id"]],
-        ot_priority_ids=[],
-    )
+    auto_reject_conflicts(request_id, schedule_ids=[sched_a["id"], sched_b["id"]])
 
     for uid in [req.get("requester_id"), req.get("target_user_id")]:
         if uid:
@@ -1635,52 +1567,53 @@ async def api_direct_swap(body: DirectSwapBody, manager=Depends(require_manager)
             "admin_decision": "approved",
             "admin_decided_at": datetime.utcnow().isoformat(),
         })
-        auto_reject_conflicts("", schedule_ids=[slot_a["id"], slot_b["id"]], ot_priority_ids=[])
+        auto_reject_conflicts("", schedule_ids=[slot_a["id"], slot_b["id"]])
         for uid in [slot_a["user_id"], slot_b["user_id"]]:
             person = get_user_by_id(uid)
             if person and person.get("line_user_id"):
                 push_message(person["line_user_id"], f"主管已直接調整您的班表，請至 LINE app 查看最新班表。")
         return {"status": "done"}
 
-    elif body.swap_type == "ot_priority":
-        slot_a = get_ot_priority_by_id(body.slot_a_id)
-        slot_b = get_ot_priority_by_id(body.slot_b_id)
+    elif body.swap_type == "ot_seq":
+        slot_a = get_schedule_by_id(body.slot_a_id)
+        slot_b = get_schedule_by_id(body.slot_b_id)
         if not slot_a or not slot_b:
-            raise HTTPException(status_code=404, detail="OT priority slot(s) not found")
+            raise HTTPException(status_code=404, detail="Schedule slot(s) not found")
 
+        # Swap ot_seq values
         requests.patch(
-            f"{SUPABASE_URL}/rest/v1/ot_priority",
+            f"{SUPABASE_URL}/rest/v1/schedules",
             headers=SUPABASE_HEADERS,
             params={"id": f"eq.{slot_a['id']}"},
-            json={"user_id": slot_b["user_id"]},
+            json={"ot_seq": slot_b.get("ot_seq")},
             timeout=10,
         )
         requests.patch(
-            f"{SUPABASE_URL}/rest/v1/ot_priority",
+            f"{SUPABASE_URL}/rest/v1/schedules",
             headers=SUPABASE_HEADERS,
             params={"id": f"eq.{slot_b['id']}"},
-            json={"user_id": slot_a["user_id"]},
+            json={"ot_seq": slot_a.get("ot_seq")},
             timeout=10,
         )
         create_swap_request({
             "request_type": "manager_direct",
             "status": "approved",
-            "ot_priority_id": slot_a["id"],
-            "target_ot_priority_id": slot_b["id"],
+            "schedule_id": slot_a["id"],
+            "target_schedule_id": slot_b["id"],
             "target_user_id": slot_b["user_id"],
             "reason": body.reason,
             "performed_by": manager["id"],
             "admin_decision": "approved",
             "admin_decided_at": datetime.utcnow().isoformat(),
         })
-        auto_reject_conflicts("", schedule_ids=[], ot_priority_ids=[slot_a["id"], slot_b["id"]])
+        auto_reject_conflicts("", schedule_ids=[slot_a["id"], slot_b["id"]])
         for uid in [slot_a["user_id"], slot_b["user_id"]]:
             person = get_user_by_id(uid)
             if person and person.get("line_user_id"):
-                push_message(person["line_user_id"], f"主管已直接調整您的加班順位，請至 LINE app 查看最新資料。")
+                push_message(person["line_user_id"], f"主管已直接調整您的加班順序，請至 LINE app 查看最新資料。")
         return {"status": "done"}
 
-    raise HTTPException(status_code=400, detail="swap_type must be shift or ot_priority")
+    raise HTTPException(status_code=400, detail="swap_type must be shift or ot_seq")
 
 
 # ── Static file serving ────────────────────────────────────────────────────────
