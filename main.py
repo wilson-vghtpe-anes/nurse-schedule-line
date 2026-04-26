@@ -140,7 +140,7 @@ def _get_schedules_range(start: str, end: str, user_id: str = None):
         ("schedule_date", f"lte.{end}"),
         ("status", "eq.active"),
         ("order", "schedule_date,user_id"),
-        ("select", "id,user_id,schedule_date,shift_type,area,notes,source_version"),
+        ("select", "id,user_id,schedule_date,shift_type,work_area,monthly_code,ot_seq,notes,source_version"),
     ]
     if user_id:
         params.append(("user_id", f"eq.{user_id}"))
@@ -152,7 +152,7 @@ def get_schedules_by_date(schedule_date: str):
         "schedule_date": f"eq.{schedule_date}",
         "status": "eq.active",
         "order": "shift_type,user_id",
-        "select": "id,user_id,schedule_date,shift_type,area,notes",
+        "select": "id,user_id,schedule_date,shift_type,work_area,monthly_code,ot_seq,notes",
         "limit": "10000",
     }) or []
 
