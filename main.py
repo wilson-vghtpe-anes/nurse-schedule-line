@@ -80,6 +80,23 @@ def _sb(path: str, method="GET", params=None, json_body=None):
     return r.json()
 
 
+def _sb_all(path: str, params: list, page_size: int = 1000) -> list:
+    """分頁撈取，繞過 Supabase max-rows 限制。"""
+    all_rows = []
+    offset = 0
+    base_params = [(k, v) for k, v in params if k not in ("limit", "offset")]
+    while True:
+        paged = base_params + [("limit", str(page_size)), ("offset", str(offset))]
+        rows = _sb(path, params=paged)
+        if not rows:
+            break
+        all_rows.extend(rows)
+        if len(rows) < page_size:
+            break
+        offset += page_size
+    return all_rows
+
+
 def get_user_by_line_id(line_user_id: str):
     rows = _sb("nurses", params={"line_user_id": f"eq.{line_user_id}", "limit": "1"})
     return rows[0] if rows else None
@@ -124,11 +141,10 @@ def _get_schedules_range(start: str, end: str, user_id: str = None):
         ("status", "eq.active"),
         ("order", "schedule_date,user_id"),
         ("select", "id,user_id,schedule_date,shift_type,area,notes,source_version"),
-        ("limit", "10000"),
     ]
     if user_id:
         params.append(("user_id", f"eq.{user_id}"))
-    return _sb("schedules", params=params) or []
+    return _sb_all("schedules", params)
 
 
 def get_schedules_by_date(schedule_date: str):
