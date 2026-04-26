@@ -124,9 +124,18 @@ textarea { resize: vertical; min-height: 60px; }
     <select id="all-shift" onchange="filterAllSchedule()" style="padding:6px 8px;border:1px solid #ddd;border-radius:8px;font-size:.9rem">
       <option value="">全部班別</option>
     </select>
-    <select id="all-area" onchange="filterAllSchedule()" style="padding:6px 8px;border:1px solid #ddd;border-radius:8px;font-size:.9rem">
-      <option value="">全部區域</option>
-    </select>
+    <div style="position:relative" id="area-dropdown-wrap">
+      <button type="button" id="area-dropdown-btn" onclick="toggleAreaDropdown()"
+        style="padding:5px 10px;border:1px solid #ddd;border-radius:8px;font-size:.9rem;background:#fff;cursor:pointer;white-space:nowrap">
+        全部區域 ▾
+      </button>
+      <div id="area-dropdown-panel" style="display:none;position:absolute;top:calc(100% + 2px);left:0;background:#fff;border:1px solid #ddd;border-radius:8px;padding:4px 0;z-index:50;min-width:120px;box-shadow:0 2px 8px rgba(0,0,0,.12)">
+        <label style="display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;font-size:.85rem;color:#666;border-bottom:1px solid #f0f0f0">
+          <input type="checkbox" id="area-cb-all" onchange="onAreaAllChange(this.checked)"> 全選
+        </label>
+        <div id="area-checkbox-list"></div>
+      </div>
+    </div>
     <button class="btn btn-primary btn-sm" onclick="loadAllSchedule()">查詢</button>
   </div>
   <div id="all-schedule-list"></div>
@@ -436,9 +445,12 @@ async function loadAllSchedule() {
     const cur = sel.value;
     sel.innerHTML = `<option value="">全部班別</option>` + shifts.map(s => `<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join("");
     const areas = [...new Set(data.schedules.map(r => r.work_area).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'zh-TW'));
-    const areaSel = document.getElementById("all-area");
-    const curArea = areaSel.value;
-    areaSel.innerHTML = `<option value="">全部區域</option>` + areas.map(a => `<option value="${a}"${a===curArea?' selected':''}>${a}</option>`).join("");
+    const prevChecked = new Set([...document.querySelectorAll(".area-cb:checked")].map(cb => cb.value));
+    document.getElementById("area-checkbox-list").innerHTML = areas.map(a =>
+      `<label style="display:flex;align-items:center;gap:6px;padding:6px 12px;cursor:pointer;font-size:.85rem">
+        <input type="checkbox" class="area-cb" value="${a}"${prevChecked.has(a) ? ' checked' : ''} onchange="onAreaCbChange()"> ${a}
+      </label>`).join("");
+    _syncAreaDropdown();
     filterAllSchedule();
   } catch { el.innerHTML = '<p class="empty">載入失敗</p>'; }
   loading(false);
@@ -446,11 +458,48 @@ async function loadAllSchedule() {
 
 function filterAllSchedule() {
   const shift = document.getElementById("all-shift").value;
-  const area  = document.getElementById("all-area").value;
+  const checkedAreas = [...document.querySelectorAll(".area-cb:checked")].map(cb => cb.value);
+  const totalAreas   = document.querySelectorAll(".area-cb").length;
   let rows = allScheduleData;
   if (shift) rows = rows.filter(r => r.shift_type === shift);
-  if (area)  rows = rows.filter(r => r.work_area === area);
+  if (checkedAreas.length > 0 && checkedAreas.length < totalAreas) {
+    rows = rows.filter(r => checkedAreas.includes(r.work_area));
+  }
   renderAllSchedule(rows, document.getElementById("all-schedule-list"));
+}
+
+function toggleAreaDropdown() {
+  const panel = document.getElementById("area-dropdown-panel");
+  panel.style.display = panel.style.display === "none" ? "block" : "none";
+}
+
+function onAreaAllChange(checked) {
+  document.querySelectorAll(".area-cb").forEach(cb => cb.checked = checked);
+  _syncAreaDropdown();
+  filterAllSchedule();
+}
+
+function onAreaCbChange() {
+  _syncAreaDropdown();
+  filterAllSchedule();
+}
+
+function _syncAreaDropdown() {
+  const all     = document.querySelectorAll(".area-cb");
+  const checked = document.querySelectorAll(".area-cb:checked");
+  const allCb   = document.getElementById("area-cb-all");
+  const btn     = document.getElementById("area-dropdown-btn");
+  if (!allCb || !btn) return;
+  if (checked.length === 0 || checked.length === all.length) {
+    allCb.checked = checked.length === all.length;
+    allCb.indeterminate = false;
+    btn.textContent = "全部區域 ▾";
+  } else {
+    allCb.checked = false;
+    allCb.indeterminate = true;
+    const names = [...checked].map(cb => cb.value);
+    btn.textContent = names.length <= 2 ? names.join("、") + " ▾" : `已選 ${names.length} 個 ▾`;
+  }
 }
 
 function renderAllSchedule(rows, el) {
@@ -1015,6 +1064,14 @@ async function respondRequest(requestId, response) {
   } catch (e) { showToast("操作失敗：" + e.message, false); }
   loading(false);
 }
+
+document.addEventListener("click", e => {
+  const wrap = document.getElementById("area-dropdown-wrap");
+  if (wrap && !wrap.contains(e.target)) {
+    const panel = document.getElementById("area-dropdown-panel");
+    if (panel) panel.style.display = "none";
+  }
+});
 </script>
 </body>
 </html>
