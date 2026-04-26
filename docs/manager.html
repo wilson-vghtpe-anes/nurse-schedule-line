@@ -124,6 +124,9 @@ textarea { resize: vertical; min-height: 60px; }
     <select id="all-shift" onchange="filterAllSchedule()" style="padding:6px 8px;border:1px solid #ddd;border-radius:8px;font-size:.9rem">
       <option value="">全部班別</option>
     </select>
+    <select id="all-area" onchange="filterAllSchedule()" style="padding:6px 8px;border:1px solid #ddd;border-radius:8px;font-size:.9rem">
+      <option value="">全部區域</option>
+    </select>
     <button class="btn btn-primary btn-sm" onclick="loadAllSchedule()">查詢</button>
   </div>
   <div id="all-schedule-list"></div>
@@ -432,6 +435,10 @@ async function loadAllSchedule() {
     const sel = document.getElementById("all-shift");
     const cur = sel.value;
     sel.innerHTML = `<option value="">全部班別</option>` + shifts.map(s => `<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join("");
+    const areas = [...new Set(data.schedules.map(r => r.work_area).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'zh-TW'));
+    const areaSel = document.getElementById("all-area");
+    const curArea = areaSel.value;
+    areaSel.innerHTML = `<option value="">全部區域</option>` + areas.map(a => `<option value="${a}"${a===curArea?' selected':''}>${a}</option>`).join("");
     filterAllSchedule();
   } catch { el.innerHTML = '<p class="empty">載入失敗</p>'; }
   loading(false);
@@ -439,7 +446,10 @@ async function loadAllSchedule() {
 
 function filterAllSchedule() {
   const shift = document.getElementById("all-shift").value;
-  const rows = shift ? allScheduleData.filter(r => r.shift_type === shift) : allScheduleData;
+  const area  = document.getElementById("all-area").value;
+  let rows = allScheduleData;
+  if (shift) rows = rows.filter(r => r.shift_type === shift);
+  if (area)  rows = rows.filter(r => r.work_area === area);
   renderAllSchedule(rows, document.getElementById("all-schedule-list"));
 }
 
@@ -459,7 +469,11 @@ function renderAllSchedule(rows, el) {
         const name = usersMap[r.user_id] || "?";
         const isMe = r.user_id === me.id;
         return `<div class="shift-row">
-          <div><span class="shift-tag">${shift}</span><span style="margin-left:8px">${name}</span></div>
+          <div>
+            <span class="shift-tag">${shift}</span>
+            <span style="margin-left:8px">${name}</span>
+            ${r.work_area ? `<span style="margin-left:6px;font-size:.78rem;color:#888;background:#f5f5f5;padding:2px 6px;border-radius:8px">${r.work_area}</span>` : ""}
+          </div>
           ${!isMe ? `<button class="btn btn-sm btn-outline" onclick="openShiftSwap('${r.id}','${r.user_id}','${name}','${shift}','${d}')">換班</button>` : ""}
         </div>`;
       }).join("")).join("")}
