@@ -761,7 +761,7 @@ function renderDirectSwapList(rows, swapType, el) {
   if (!rows.length) { el.innerHTML = '<p class="empty">無資料</p>'; return; }
   el.innerHTML = '<div class="card">' + rows.map((r, i) => {
     const name = usersMap[r.user_id] || "?";
-    const label = swapType === "shift" ? `${name}：${r.shift_type}${r.area ? " " + r.area : ""}` : `${r.shift_type ? "【" + r.shift_type + "】" : ""}${r.ot_seq} ${name}`;
+    const label = swapType === "shift" ? `${name}：${r.shift_type}${r.work_area ? " " + r.work_area : ""}` : `${r.shift_type ? "【" + r.shift_type + "】" : ""}${r.ot_seq} ${name}`;
     return `<div class="shift-row" style="cursor:pointer" id="direct-row-${i}" onclick="selectDirectSlot(${i},'${r.id}','${label.replace(/'/g, "\\'")}')">
       <span>${label}</span>
       <span id="direct-check-${i}" style="color:#06c755;display:none">✓</span>
@@ -833,7 +833,7 @@ function openShiftSwap(theirScheduleId, theirUserId, theirName, theirShift, date
   document.getElementById("swap-their-slot-id").value = theirScheduleId;
   document.getElementById("swap-target-user-id").value = theirUserId;
   document.getElementById("swap-modal-title").textContent = "發換班請求";
-  document.getElementById("swap-my-slot-label").textContent = `${dateVal} ${myShift.shift_type}${myShift.area ? " " + myShift.area : ""}`;
+  document.getElementById("swap-my-slot-label").textContent = `${dateVal} ${myShift.shift_type}${myShift.work_area ? " " + myShift.work_area : ""}`;
   document.getElementById("swap-their-slot-label").textContent = `${theirName}：${dateVal} ${theirShift}`;
   document.getElementById("swap-reason").value = "";
   document.getElementById("swap-modal").classList.add("open");

@@ -460,7 +460,7 @@ function openShiftSwap(theirScheduleId, theirUserId, theirName, theirShift, date
   document.getElementById("swap-their-slot-id").value = theirScheduleId;
   document.getElementById("swap-target-user-id").value = theirUserId;
   document.getElementById("swap-modal-title").textContent = "發換班請求";
-  document.getElementById("swap-my-slot-label").textContent = `${dateVal} ${myShift.shift_type}${myShift.area ? " " + myShift.area : ""}`;
+  document.getElementById("swap-my-slot-label").textContent = `${dateVal} ${myShift.shift_type}${myShift.work_area ? " " + myShift.work_area : ""}`;
   document.getElementById("swap-their-slot-label").textContent = `${theirName}：${dateVal} ${theirShift}`;
   document.getElementById("swap-reason").value = "";
   document.getElementById("swap-modal").classList.add("open");
